@@ -806,6 +806,66 @@ QImage colorRangeMask(const QImage &src, const QColor &color, int fuzziness)
     return out;
 }
 
+QImage fillCoverage(const QImage &src, const QImage &region, const QPoint &seed)
+{
+    const QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    QImage out = region.convertToFormat(QImage::Format_Alpha8);
+    if (!img.rect().contains(seed) || out.size() != img.size())
+        return out;
+    const int w = img.width(), h = img.height();
+    const QRgb s = img.pixel(seed);
+    uchar *outBits = out.bits();  // detach before going parallel (out may share region's data)
+    const qsizetype outBpl = out.bytesPerLine();
+    auto vec = [](QRgb c) { return std::array<int, 4>{qRed(c), qGreen(c), qBlue(c), qAlpha(c)}; };
+    const auto sv = vec(s);
+    auto dist2 = [](const std::array<int, 4> &a, const std::array<int, 4> &b) {
+        int d = 0;
+        for (int k = 0; k < 4; ++k)
+            d += (a[k] - b[k]) * (a[k] - b[k]);
+        return d;
+    };
+    parallelFor(h, [&](int y) {
+        const uchar *in = region.constScanLine(y);
+        uchar *o = outBits + y * outBpl;
+        for (int x = 0; x < w; ++x) {
+            if (in[x])
+                continue;
+            // Only pixels touching the filled region.
+            bool edge = false;
+            for (int dy = -1; dy <= 1 && !edge; ++dy)
+                for (int dx = -1; dx <= 1 && !edge; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    edge = nx >= 0 && ny >= 0 && nx < w && ny < h && region.constScanLine(ny)[nx];
+                }
+            if (!edge)
+                continue;
+            // The border color: the unfilled neighbor (or this pixel) least like the clicked color.
+            const auto pv = vec(reinterpret_cast<const QRgb *>(img.constScanLine(y))[x]);
+            auto qv = pv;
+            int far = dist2(pv, sv);
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h || region.constScanLine(ny)[nx])
+                        continue;
+                    const auto nv = vec(reinterpret_cast<const QRgb *>(img.constScanLine(ny))[nx]);
+                    if (const int d = dist2(nv, sv); d > far) {
+                        far = d;
+                        qv = nv;
+                    }
+                }
+            if (far == 0)
+                continue;
+            // How much of the clicked color this pixel holds, between the border color (0) and it (1).
+            int dot = 0;
+            for (int k = 0; k < 4; ++k)
+                dot += (pv[k] - qv[k]) * (sv[k] - qv[k]);
+            o[x] = uchar(std::clamp(dot * 255 / far, 0, 255));
+        }
+    });
+    return out;
+}
+
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous)
 {
     const QImage img = src.convertToFormat(QImage::Format_ARGB32_Premultiplied);

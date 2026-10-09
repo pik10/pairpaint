@@ -128,6 +128,49 @@ static void testSelections()
 
 
 // Dodge, Burn and Smudge, driven through the canvas like a user would.
+// Reported: a rectangle filled with the Paint Bucket left a thin light gap inside its border.
+// The fill must reach the border with no light pixels in between, for a rectangle drawn off
+// the pixel grid and for a soft (anti-aliased) ellipse.
+static void testFillEdges(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    for (Tool::Id shape : {Tool::RectShape, Tool::EllipseShape})
+    for (qreal off : {0.0, 0.3, 0.5, 0.7}) {
+        w.addDocument(new Document(QSize(160, 120), Qt::white));
+        auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+        Document *d = c->document();
+        c->setZoom(1.37, QPointF(c->width() / 2.0, c->height() / 2.0));  // the pointer lands between pixels
+        settings->size = 3;
+        settings->opacity = 100;
+        settings->fillShape = false;
+        settings->antialias = true;
+        settings->setForeground(Qt::black);
+        tools->setCurrent(shape);
+        drag(c, {20 + off, 15 + off}, {140 + off, 104 + off});
+        settings->setForeground(Qt::red);
+        settings->tolerance = 32;
+        tools->setCurrent(Tool::Fill);
+        drag(c, {80, 60}, {80, 60});
+        // Walk left from the middle: red fill, then straight into the border, never through white-ish.
+        const QImage img = d->layer(0).image;
+        int gaps = 0;
+        for (int y : {40, 60, 80}) {
+            int x = 80;
+            while (x > 0 && img.pixelColor(x, y) == QColor(Qt::red))
+                --x;
+            for (; x > 0; --x) {
+                const QColor p = img.pixelColor(x, y);
+                if (p.red() < 60 && p.green() < 60)
+                    break;  // reached the border
+                if (std::abs(p.red() - p.green()) < 30 && p.green() > 90)
+                    ++gaps;  // gray or white, untouched by the red fill and not border: a gap
+            }
+        }
+        std::printf("     %s at +%.1f px: %d gap pixels\n", shape == Tool::RectShape ? "rectangle" : "ellipse", off, gaps);
+        CHECK(gaps == 0);
+        d->undoStack()->setClean();
+    }
+}
+
 // Brush smoothing: a shaky stroke comes out steadier, and still ends where the pointer stopped.
 static void testSmoothing(MainWindow &w, ToolManager *tools, ToolSettings *settings)
 {
@@ -2010,6 +2053,7 @@ int main(int argc, char **argv) {
     testSelections();
     testRetouchTools(w, tools, settings);
     testSmoothing(w, tools, settings);
+    testFillEdges(w, tools, settings);
     testGuides(w, tools, settings);
     testLayerStyles();
     testGroups(w, tools, settings);

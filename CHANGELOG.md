@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Filling a shape with the Paint Bucket left a thin light gap inside its outline. Rectangles and
+  ellipses are now drawn on the pixel grid, so straight edges are crisp, and the Paint Bucket also
+  fills into soft (anti-aliased) edges, blending with the outline instead of stopping short.
+
 ## 0.7.0 — 2026-10-09
 
 ### New

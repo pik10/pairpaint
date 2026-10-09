@@ -673,7 +673,14 @@ private:
         const QColor c = m_settings->foreground();
         const bool fill = m_settings->fillShape && m_id != LineShape;
         const bool aa = m_settings->antialias;
-        const QRectF r = QRectF(m_start, m_end).normalized();
+        QRectF r = QRectF(m_start, m_end).normalized();
+        if (m_id != LineShape) {
+            // On the pixel grid, so straight edges come out crisp (a soft edge would leave a gap
+            // when filled): corners on whole pixels, an odd-width outline centered on pixels.
+            r = QRectF(QPointF(std::round(r.left()), std::round(r.top())), QPointF(std::round(r.right()), std::round(r.bottom())));
+            if (int(std::round(w)) % 2 == 1)
+                r.translate(0.5, 0.5);
+        }
         m_edit.render(r.adjusted(-w - 2, -w - 2, w + 2, w + 2).toAlignedRect(), m_settings->opacity / 100.0,
                       [&](QPainter &p) {
             p.setRenderHint(QPainter::Antialiasing, aa);
@@ -982,7 +989,8 @@ public:
         m_doc->prepareForPixelEdit();
         const DocState before = m_doc->state();
         const QImage sample = m_settings->sampleMerged ? m_doc->flattened() : m_doc->targetImage();
-        const QImage region = Filters::floodMask(sample, pt, m_settings->tolerance, m_settings->contiguous);
+        const QImage region = Filters::fillCoverage(
+            sample, Filters::floodMask(sample, pt, m_settings->tolerance, m_settings->contiguous), pt);
 
         QImage paint(m_doc->size(), QImage::Format_ARGB32_Premultiplied);
         paint.fill(m_settings->foreground());

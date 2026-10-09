@@ -62,6 +62,11 @@ QImage heal(const QImage &source, const QImage &dest, const QImage &mask, double
 // within `tolerance` (0..255 per channel). Returns a Format_Alpha8 mask.
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous);
 
+// The Paint Bucket's coverage: `region` (from floodMask) plus the soft edge pixels around it,
+// each covered as much as it is made of the clicked color (it is a mix of that color and the
+// border next to it), so a fill meets anti-aliased outlines without a light gap.
+QImage fillCoverage(const QImage &src, const QImage &region, const QPoint &seed);
+
 // Mask operations on Format_Alpha8 masks (selections).
 // Grows (radius > 0) or shrinks (radius < 0) a mask with round, anti-aliased edges.
 QImage morphMask(const QImage &mask, double radius);
