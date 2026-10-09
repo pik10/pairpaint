@@ -51,6 +51,16 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-10-09">
+      <description>
+        <p>Brush smoothing, rulers, guides and snapping.</p>
+        <ul>
+          <li>Smoothing option for all brush tools steadies shaky strokes</li>
+          <li>Rulers, and guides you drag out of them, saved in projects and PSD files</li>
+          <li>Selections, shapes, crop and moved content snap to guides and the canvas edges and center</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-09">
       <description>
         <p>Autosave and crash recovery: unsaved changes are copied every 2 minutes, and after a crash PairPaint offers to recover them.</p>

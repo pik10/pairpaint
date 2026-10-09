@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.19)
-project(PairPaint VERSION 0.6.0 LANGUAGES CXX)
+project(PairPaint VERSION 0.7.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

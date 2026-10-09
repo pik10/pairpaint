@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-10-09
 
 ### New
 - **Brush smoothing**: a Smoothing option for all brush tools steadies shaky strokes. The brush
