@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **HEIC photos** (the default format of iPhone cameras) open on all systems, turned upright:
+  - Linux: decoded with libheif, which the AppImage includes.
+  - Windows: decoded by Windows itself, which needs the "HEIF Image Extensions" and
+    "HEVC Video Extensions" from the Microsoft Store (often preinstalled). Without them,
+    PairPaint says what to install.
+  - macOS: decoded by macOS.
+
+### Fixed
+- Photos with a wide-gamut color profile (Display P3 from phones, Adobe RGB) looked dull: they
+  are now converted to sRGB when opened.
+
 ## 0.4.0 — 2026-10-09
 
 ### New

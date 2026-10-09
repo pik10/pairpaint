@@ -29,6 +29,7 @@ bool hasQuality(const QString &path);
 // Largest image (in pixels) the readers accept; damaged files can claim absurd sizes.
 qint64 maxImagePixels();
 void setMaxImagePixels(qint64 pixels);  // tests and the fuzzer lower it
+QString tooLargeMessage(qint64 width, qint64 height);
 // Every layer is a full-size image, so a file's layers together are limited too.
 qint64 maxTotalPixels();
 

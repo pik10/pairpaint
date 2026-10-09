@@ -4,9 +4,11 @@
 #include "FileIO.h"
 
 #include "Document.h"
+#include "Heif.h"
 #include "Psd.h"
 
 #include <QBuffer>
+#include <QColorSpace>
 #include <QDataStream>
 #include <QFile>
 #include <QFileInfo>
@@ -278,11 +280,20 @@ void PixelBudget::take(qint64 pixels)
 }
 void setMaxImagePixels(qint64 pixels) { g_maxImagePixels = pixels; }
 
+QString tooLargeMessage(qint64 width, qint64 height)
+{
+    return QObject::tr("The image is too large (%1 × %2 pixels). PairPaint opens images up to %3 megapixels.")
+        .arg(width).arg(height).arg(maxImagePixels() / 1'000'000);
+}
+
 QString openFilter()
 {
     QStringList patterns{QStringLiteral("*.pairpaint"), QStringLiteral("*.psd")};
     for (const QByteArray &fmt : QImageReader::supportedImageFormats())
         patterns << QStringLiteral("*.") + QString::fromLatin1(fmt);
+    if (Heif::hasDecoder())
+        patterns << QStringLiteral("*.heic") << QStringLiteral("*.heif") << QStringLiteral("*.hif");
+    patterns.removeDuplicates();
     return QObject::tr("All Supported (%1)").arg(patterns.join(' ')) + QStringLiteral(";;")
          + projectFilterEntry() + QStringLiteral(";;") + QObject::tr("Photoshop (*.psd)") + QStringLiteral(";;")
          + QObject::tr("All Files (*)");
@@ -336,20 +347,38 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
     if (isPsdFile(path))
         return Psd::read(path, error, warning);
 
-    QImageReader reader(path);
-    reader.setAutoTransform(true);  // honor EXIF orientation
-    const QSize size = reader.size();
-    if (size.isValid() && qint64(size.width()) * size.height() > maxImagePixels()) {
-        *error = QObject::tr("The image is too large (%1 × %2 pixels). PairPaint opens images up to %3 megapixels.")
-                     .arg(size.width()).arg(size.height()).arg(maxImagePixels() / 1'000'000);
-        return nullptr;
+    QImage img;
+    if (Heif::hasDecoder() && Heif::isHeif(path)) {
+        img = Heif::read(path, error);
+        if (img.isNull())
+            return nullptr;
+    } else {
+        QImageReader reader(path);
+        reader.setAutoTransform(true);  // honor EXIF orientation
+        const QSize size = reader.size();
+        if (size.isValid() && qint64(size.width()) * size.height() > maxImagePixels()) {
+            *error = tooLargeMessage(size.width(), size.height());
+            return nullptr;
+        }
+        // Qt's own decoding limit (256 MB by default) would refuse large photos PairPaint can edit.
+        QImageReader::setAllocationLimit(int(std::min<qint64>(maxImagePixels() * 4 / (1024 * 1024) + 1, 1 << 30)));
+        img = reader.read();
+        if (img.isNull()) {
+            *error = reader.errorString();
+            return nullptr;
+        }
     }
-    // Qt's own decoding limit (256 MB by default) would refuse large photos PairPaint can edit.
-    QImageReader::setAllocationLimit(int(std::min<qint64>(maxImagePixels() * 4 / (1024 * 1024) + 1, 1 << 30)));
-    const QImage img = reader.read();
-    if (img.isNull()) {
-        *error = reader.errorString();
-        return nullptr;
+    // PairPaint edits in sRGB. Photos with a wider color space (Display P3 from phones, Adobe RGB)
+    // are converted, or their colors would look dull.
+    const QColorSpace cs = img.colorSpace();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    const bool rgb = cs.colorModel() == QColorSpace::ColorModel::Rgb;
+#else
+    const bool rgb = true;
+#endif
+    if (cs.isValid() && rgb && cs != QColorSpace(QColorSpace::SRgb)) {
+        img = img.convertToFormat(QImage::Format_ARGB32);
+        img.convertToColorSpace(QColorSpace::SRgb);
     }
     return new Document(img);
 }

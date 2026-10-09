@@ -40,9 +40,28 @@ jobs:
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libwayland-dev
 
+      # HEIC photos. Built from source rather than taken from Ubuntu 22.04, whose libheif is from
+      # 2021: a recent decoder for files from the internet, and only the HEVC decoder (smaller).
+      - name: Build libde265 and libheif
+        run: |
+          git clone --depth 1 --branch v1.1.3 https://github.com/strukturag/libde265.git
+          cmake -S libde265 -B libde265/build -DCMAKE_BUILD_TYPE=Release -DENABLE_SDL=OFF -DENABLE_ENCODER=OFF
+          cmake --build libde265/build --parallel
+          sudo cmake --install libde265/build
+          git clone --depth 1 --branch v1.23.6 https://github.com/strukturag/libheif.git
+          cmake -S libheif -B libheif/build -DCMAKE_BUILD_TYPE=Release -DENABLE_PLUGIN_LOADING=OFF \
+            -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_X264=OFF -DWITH_OpenH264_DECODER=OFF \
+            -DWITH_AOM_DECODER=OFF -DWITH_AOM_ENCODER=OFF -DWITH_DAV1D=OFF -DWITH_LIBSHARPYUV=OFF \
+            -DWITH_EXAMPLES=OFF -DWITH_GDK_PIXBUF=OFF -DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF
+          cmake --build libheif/build --parallel
+          sudo cmake --install libheif/build
+          sudo ldconfig
+
       - name: Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DPAIRPAINT_BUILD_TESTS=OFF
+          set -o pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DPAIRPAINT_BUILD_TESTS=OFF 2>&1 | tee configure.log
+          grep -q "HEIC/HEIF support: libheif" configure.log  # never ship without it
           cmake --build build --parallel
           DESTDIR="$PWD/AppDir" cmake --install build
 
@@ -60,6 +79,7 @@ jobs:
           chmod +x linuxdeploy*.AppImage
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
           ls AppDir/usr/plugins/imageformats
+          ls AppDir/usr/lib | grep -E "libheif|libde265"
 
       - name: Smoke test
         env:
@@ -171,6 +191,7 @@ jobs:
           codesign --force --deep --sign - "$app"
           lipo -info "$app/Contents/MacOS/PairPaint"
           ls "$app/Contents/PlugIns/imageformats"
+          ls "$app/Contents/PlugIns/imageformats" | grep -q macheif  # HEIC photos
 
       - name: Smoke test
         run: build/PairPaint.app/Contents/MacOS/PairPaint --version

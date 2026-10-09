@@ -8,6 +8,7 @@
 #include "Canvas.h"
 #include "Document.h"
 #include "FileIO.h"
+#include "Heif.h"
 #include "FilterDialog.h"
 #include "Filters.h"
 #include "MainWindow.h"
@@ -17,6 +18,8 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QColorSpace>
+#include <QColorTransform>
 #include <QDir>
 #include <QElapsedTimer>
 #include <limits>
@@ -1139,6 +1142,58 @@ static void testPhotoFixes()
     }
 }
 
+// HEIC photos (iPhone): opened upright, with Display P3 colors converted to sRGB.
+static void testHeic()
+{
+    const QString sample = QStringLiteral(PAIRPAINT_TEST_DATA) + "/heic/sample.heic";
+    // Builds expected to open HEIC set PAIRPAINT_EXPECT_HEIF (CI on Linux and macOS); on Windows it
+    // depends on whether the system's HEIF and HEVC codecs are installed.
+    const bool expected = qEnvironmentVariableIsSet("PAIRPAINT_EXPECT_HEIF");
+    CHECK(Heif::isHeif(sample) && !Heif::isHeif(QStringLiteral(PAIRPAINT_TEST_DATA) + "/fuzz/seed-small.pairpaint"));
+    QString err, warn;
+    Document *d = FileIO::load(sample, &err, &warn);
+    std::printf("HEIC: %s%s\n", d ? "opened" : "not opened: ", qPrintable(err));
+    if (!d) {
+        CHECK(!expected);
+#ifdef Q_OS_WIN
+        CHECK(err.contains("HEIF Image Extensions"));  // tells the user what to install
+#endif
+        return;
+    }
+    CHECK(FileIO::openFilter().contains("*.heic"));
+    CHECK(d->size() == QSize(48, 64));  // stored 64 x 48, rotated for display
+    // The stored colors are Display P3; the document has them in sRGB.
+    const QColorTransform toSrgb =
+        QColorSpace(QColorSpace::Primaries::DciP3D65, QColorSpace::TransferFunction::SRgb).transformationToColorSpace(QColorSpace::SRgb);
+    auto near = [](QColor a, QColor b) {
+        return std::abs(a.red() - b.red()) <= 6 && std::abs(a.green() - b.green()) <= 6 && std::abs(a.blue() - b.blue()) <= 6;
+    };
+    const QColor blue = toSrgb.map(QColor(40, 60, 200)), red = toSrgb.map(QColor(200, 60, 40));
+    const QColor green = toSrgb.map(QColor(60, 180, 60));
+    CHECK(!near(red, QColor(200, 60, 40)));  // the conversion is large enough to see
+    CHECK(near(px(d, 12, 16, 0), blue) && near(px(d, 36, 16, 0), red));
+    CHECK(near(px(d, 12, 48, 0), QColor(128, 128, 128)) && near(px(d, 36, 48, 0), green));
+    std::printf("     top left %s, top right %s (expected %s, %s)\n", qPrintable(px(d, 12, 16, 0).name()),
+                qPrintable(px(d, 36, 16, 0).name()), qPrintable(blue.name()), qPrintable(red.name()));
+    delete d;
+
+    // Damaged: cut short, and a header claiming an enormous image.
+    QFile f(sample);
+    CHECK(f.open(QIODevice::ReadOnly));
+    const QByteArray bytes = f.readAll();
+    for (int n : {12, 100, 300, int(bytes.size()) - 50}) {
+        QFile cut(tmpPath("cut.heic"));
+        CHECK(cut.open(QIODevice::WriteOnly) && cut.write(bytes.left(n)) == n);
+        cut.close();
+        Document *broken = FileIO::load(tmpPath("cut.heic"), &err, &warn);
+        CHECK(!broken && !err.isEmpty());
+        delete broken;
+    }
+    FileIO::setMaxImagePixels(1000);
+    CHECK(!FileIO::load(sample, &err, &warn) && err.contains("too large"));
+    FileIO::setMaxImagePixels(250'000'000);
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -1510,6 +1565,7 @@ int main(int argc, char **argv) {
     testDamagedFiles();
     testHostileFiles();
     testPhotoFixes();
+    testHeic();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;

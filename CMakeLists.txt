@@ -27,6 +27,7 @@ qt_add_library(pairpaint_core STATIC
     src/FileIO.cpp src/FileIO.h
     src/FilterDialog.cpp src/FilterDialog.h
     src/Filters.cpp src/Filters.h
+    src/Heif.cpp src/Heif.h
     src/Icons.cpp src/Icons.h
     src/LayersPanel.cpp src/LayersPanel.h
     src/MainWindow.cpp src/MainWindow.h
@@ -37,6 +38,28 @@ qt_add_library(pairpaint_core STATIC
 )
 target_include_directories(pairpaint_core PUBLIC src)
 target_link_libraries(pairpaint_core PUBLIC Qt6::Widgets Qt6::Concurrent)
+
+# HEIC/HEIF photos: on Windows through the system's codec (WIC), on macOS through Qt's own
+# plugin, elsewhere with libheif.
+if(WIN32)
+    target_link_libraries(pairpaint_core PRIVATE windowscodecs ole32)
+elseif(NOT APPLE)
+    option(PAIRPAINT_HEIF "Open HEIC/HEIF photos (needs libheif)" ON)
+    if(PAIRPAINT_HEIF)
+        find_package(PkgConfig)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(LIBHEIF IMPORTED_TARGET libheif)
+        endif()
+        if(LIBHEIF_FOUND)
+            message(STATUS "HEIC/HEIF support: libheif ${LIBHEIF_VERSION}")
+            target_link_libraries(pairpaint_core PRIVATE PkgConfig::LIBHEIF)
+            target_compile_definitions(pairpaint_core PRIVATE PAIRPAINT_HAVE_LIBHEIF)
+        else()
+            message(WARNING "libheif not found, so HEIC/HEIF photos won't open. Install it (e.g. libheif-dev) "
+                            "or configure with -DPAIRPAINT_HEIF=OFF.")
+        endif()
+    endif()
+endif()
 
 qt_add_executable(pairpaint src/main.cpp)
 if(WIN32)

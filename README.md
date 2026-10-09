@@ -58,11 +58,14 @@ You can also [build from source](#building).
 - **Files**: native `.pairpaint` project format (keeps everything); **Photoshop PSD** import (RGB, grayscale,
   CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, vector masks, clipping masks, Fill, all blend modes,
   adjustment layers, fill and shape layers, drop shadow / outer glow / stroke effects) and layered export; open/export PNG, JPEG,
-  WebP, BMP, TIFF, GIF, … (with a quality setting for JPEG and WebP); clipboard copy/paste; drag and drop
+  WebP, BMP, TIFF, GIF, … (with a quality setting for JPEG and WebP); open **HEIC** photos from iPhones
+  (on Windows this uses the system's "HEIF Image Extensions" and "HEVC Video Extensions"); photos with a
+  wide-gamut color profile (Display P3, Adobe RGB) are converted to sRGB; clipboard copy/paste; drag and drop
 
 ## Building
 
-Requirements: CMake ≥ 3.19, a C++17 compiler and Qt ≥ 6.2 (Widgets, Concurrent).
+Requirements: CMake ≥ 3.19, a C++17 compiler and Qt ≥ 6.2 (Widgets, Concurrent). Optional on Linux:
+libheif with its HEVC decoder, to open HEIC photos (without it the build still works, with a warning).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -70,9 +73,9 @@ cmake --build build -j
 ./build/pairpaint [image files...]
 ```
 
-- **Arch**: `sudo pacman -S qt6-base cmake` (add `qt6-imageformats` for WebP/TIFF)
-- **Debian/Ubuntu**: `sudo apt install qt6-base-dev cmake build-essential qt6-image-formats-plugins`
-- **Fedora**: `sudo dnf install qt6-qtbase-devel cmake gcc-c++ qt6-qtimageformats`
+- **Arch**: `sudo pacman -S qt6-base cmake libheif` (add `qt6-imageformats` for WebP/TIFF)
+- **Debian/Ubuntu**: `sudo apt install qt6-base-dev cmake build-essential qt6-image-formats-plugins libheif-dev libheif-plugin-libde265`
+- **Fedora**: `sudo dnf install qt6-qtbase-devel cmake gcc-c++ qt6-qtimageformats libheif-devel`
 - **Windows**: install Qt 6 with the online installer (MSVC kit), build from a Qt command prompt,
   then run `windeployqt build\pairpaint.exe` to bundle the DLLs.
 - **macOS**: `brew install qt cmake`, build, then `macdeployqt build/pairpaint.app`.
