@@ -369,8 +369,9 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
         }
 #ifdef Q_OS_MACOS
         // Qt's macOS HEIF plugin already converts the pixels to sRGB but still labels them with
-        // the photo's own color space; converting again would oversaturate them.
-        if (reader.format() == "heic" || reader.format() == "heif")
+        // the photo's own color space; converting again would oversaturate them. (The reader
+        // doesn't report the plugin's format, so the file is recognized by its contents.)
+        if (Heif::isHeif(path))
             img.setColorSpace(QColorSpace::SRgb);
 #endif
     }
