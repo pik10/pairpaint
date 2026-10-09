@@ -8,6 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Concurrent)
 qt_standard_project_setup()
 
+# Developer builds that catch memory errors and undefined behavior at run time:
+#   cmake -B build-asan -DPAIRPAINT_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+option(PAIRPAINT_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(PAIRPAINT_SANITIZE AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Everything except main() is a library, so the tests can link against it.
 qt_add_library(pairpaint_core STATIC
     src/Adjustments.cpp src/Adjustments.h

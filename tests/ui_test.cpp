@@ -18,6 +18,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
+#include <limits>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -719,6 +721,92 @@ static void testToolPack(MainWindow &w, ToolManager *tools, ToolSettings *settin
     settings->pressureSize = true;
 }
 
+
+// Damaged and malicious files must fail cleanly and quickly, never crash or hang.
+// (Regressions for bugs found by the fuzzer in tests/fuzz_files.cpp.)
+static void testDamagedFiles()
+{
+    QString err, warn;
+    auto loads = [&](const QByteArray &bytes, const QString &ext, qint64 *ms = nullptr) {
+        const QString path = tmpPath(qPrintable(QStringLiteral("damaged.") + ext));
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            return false;
+        f.write(bytes);
+        f.close();
+        QElapsedTimer timer;
+        timer.start();
+        Document *d = FileIO::load(path, &err, &warn);
+        if (d)
+            d->flattened();
+        if (ms)
+            *ms = timer.elapsed();
+        const bool ok = d != nullptr;
+        delete d;
+        return ok;
+    };
+    auto readAll = [](const QString &path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    };
+    const QString data = QStringLiteral(PAIRPAINT_TEST_DATA);
+
+    // A layer name claiming ~4 billion characters used to make the reader loop for minutes.
+    qint64 ms = 0;
+    CHECK(!loads(readAll(data + "/fuzz/hang-huge-layer-name.psd"), "psd", &ms));
+    CHECK(ms < 2000);
+
+    // Write a small valid PSD to corrupt in specific ways.
+    Document small(QSize(16, 8), Qt::red);
+    small.addLayer();
+    CHECK(Psd::write(&small, tmpPath("small.psd"), &err, &warn));
+    const QByteArray psd = readAll(tmpPath("small.psd"));
+    CHECK(loads(psd, "psd"));
+    auto put32 = [](QByteArray &b, int at, quint32 v) {
+        for (int k = 0; k < 4; ++k)
+            b[at + k] = char(v >> (24 - 8 * k));
+    };
+    // Layer bounds whose width overflows (the first layer record starts at byte 44).
+    QByteArray badRect = psd;
+    put32(badRect, 44, 0x88000000u);  // top: about -2 billion
+    put32(badRect, 52, 0x78000000u);  // bottom: about +2 billion
+    CHECK(!loads(badRect, "psd"));
+    // A header claiming a 30000 x 30000 image: too large, rejected without allocating.
+    QByteArray huge = psd;
+    put32(huge, 14, 30000);
+    put32(huge, 18, 30000);
+    FileIO::setMaxImagePixels(100'000'000);
+    CHECK(!loads(huge, "psd") && err.contains("too large"));
+    FileIO::setMaxImagePixels(250'000'000);
+
+    // Cut short at every length: each attempt must end quickly without crashing.
+    const QByteArray project = readAll(data + "/fuzz/seed-full.pairpaint");
+    QElapsedTimer all;
+    all.start();
+    int projectsOpened = 0;
+    for (int n = 0; n < psd.size(); n += 3)
+        loads(psd.left(n), "psd");  // may open once all layers are present (only the flattened copy is cut)
+    for (int n = 0; n < project.size(); n += 7)
+        projectsOpened += loads(project.left(n), "pairpaint");
+    CHECK(projectsOpened == 0);      // a truncated project is never accepted as complete
+    CHECK(all.elapsed() < 30000);
+
+    // Unknown blend modes and out-of-range values from files are made safe.
+    CHECK(blendModeFromInt(134610944) == QPainter::CompositionMode_SourceOver);
+    CHECK(blendModeFromInt(int(Blend::Hue)) == Blend::Hue);
+    Layer l;
+    l.opacity = std::numeric_limits<double>::quiet_NaN();
+    l.fillOpacity = 7;
+    l.style.shadowSize = 2000000000;
+    l.style.strokeSize = -5;
+    sanitizeLayer(l);
+    CHECK(l.opacity == 1.0 && l.fillOpacity == 1.0 && l.style.shadowSize == 250 && l.style.strokeSize == 1);
+    // Adjustment settings that would overflow (Posterize) or misread (Curves channel counts).
+    const QImage gray(4, 4, QImage::Format_ARGB32_Premultiplied);
+    CHECK(!Adjustments::apply(gray, Adjustment::Posterize, {2000000000}).isNull());
+    CHECK(!Adjustments::apply(gray, Adjustment::Curves, {0, 0, 255, 255, -1, 500000, 3}).isNull());
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -1083,6 +1171,7 @@ int main(int argc, char **argv) {
     testOnCanvasText(w, tools, settings);
     testToolPack(w, tools, settings);
     testPhotoshopFiles();
+    testDamagedFiles();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;

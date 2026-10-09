@@ -4,6 +4,7 @@
 #include "Psd.h"
 
 #include "Document.h"
+#include "FileIO.h"
 
 #include <QDataStream>
 #include <QFile>
@@ -13,6 +14,8 @@
 #include <QSaveFile>
 #include <QVariant>
 #include <QtEndian>
+#include <cmath>
+#include <limits>
 
 namespace {
 
@@ -59,16 +62,18 @@ class Reader {
 public:
     explicit Reader(QFile &f) : m_file(f), m_in(&f) { m_in.setByteOrder(QDataStream::BigEndian); }
 
-    quint8 u8() { quint8 v = 0; m_in >> v; return v; }
-    quint16 u16() { quint16 v = 0; m_in >> v; return v; }
-    qint16 i16() { qint16 v = 0; m_in >> v; return v; }
-    quint32 u32() { quint32 v = 0; m_in >> v; return v; }
-    qint32 i32() { qint32 v = 0; m_in >> v; return v; }
-    qint64 i64() { qint64 v = 0; m_in >> v; return v; }
-    double f64() { double v = 0; m_in >> v; return v; }
+    // Every read checks for the end of the file: a damaged file must stop the reader with an
+    // error, never leave it looping on values it can no longer read.
+    quint8 u8() { return read<quint8>(); }
+    quint16 u16() { return read<quint16>(); }
+    qint16 i16() { return read<qint16>(); }
+    quint32 u32() { return read<quint32>(); }
+    qint32 i32() { return read<qint32>(); }
+    qint64 i64() { return read<qint64>(); }
+    double f64() { return read<double>(); }
     QByteArray bytes(qint64 n)
     {
-        if (n < 0 || n > m_file.size() - m_file.pos())
+        if (n < 0 || n > m_file.size() - m_file.pos() || n > std::numeric_limits<int>::max())
             throw QObject::tr("The file is truncated.");
         QByteArray b(n, Qt::Uninitialized);
         if (m_in.readRawData(b.data(), int(n)) != n)
@@ -76,8 +81,12 @@ public:
         return b;
     }
     qint64 pos() const { return m_file.pos(); }
-    void seek(qint64 p) { m_file.seek(p); }
-    void skip(qint64 n) { m_file.seek(m_file.pos() + n); }
+    void seek(qint64 p)
+    {
+        m_file.seek(p);
+        m_in.resetStatus();  // a skipped damaged block shouldn't affect what follows
+    }
+    void skip(qint64 n) { seek(m_file.pos() + n); }
     void check() const
     {
         if (m_in.status() != QDataStream::Ok)
@@ -85,6 +94,16 @@ public:
     }
 
 private:
+    template <typename T>
+    T read()
+    {
+        T v{};
+        m_in >> v;
+        if (m_in.status() != QDataStream::Ok)
+            throw QObject::tr("The file is truncated or damaged.");
+        return v;
+    }
+
     QFile &m_file;
     QDataStream m_in;
 };
@@ -120,9 +139,11 @@ QByteArray to8bit(const QByteArray &plane, int depth)
 // Decodes one channel of w x h samples. `len` is the data length after the compression field.
 QByteArray readChannel(Reader &r, int compression, int w, int h, int depth, qint64 len)
 {
-    const int bpr = w * depth / 8;  // bytes per row
     if (w <= 0 || h <= 0)
         return {};
+    if (qint64(w) * h > 2 * FileIO::maxImagePixels())
+        throw QObject::tr("The file is damaged (a layer is impossibly large).");
+    const int bpr = w * depth / 8;  // bytes per row
     switch (compression) {
     case 0:
         return to8bit(r.bytes(qint64(bpr) * h), depth);
@@ -134,6 +155,9 @@ QByteArray readChannel(Reader &r, int compression, int w, int h, int depth, qint
             total += c;
         }
         const QByteArray data = r.bytes(total);
+        // PackBits expands at most 128 bytes from 2, so the claimed size must be reachable.
+        if (qint64(bpr) * h > 64 * total + h)
+            throw QObject::tr("The file is damaged (compressed data too short).");
         QByteArray out;
         out.reserve(qint64(bpr) * h);
         int pos = 0;
@@ -179,6 +203,8 @@ QByteArray readChannel(Reader &r, int compression, int w, int h, int depth, qint
 QImage assemble(const QMap<int, QByteArray> &planes, const QRect &rect, const QSize &canvas, int colorMode)
 {
     QImage img(canvas, QImage::Format_ARGB32);
+    if (img.isNull())
+        throw QObject::tr("Not enough memory to open this file.");
     img.fill(Qt::transparent);
     const QRect visible = rect & img.rect();
     const QByteArray empty;
@@ -324,15 +350,20 @@ private:
 double num(const QVariantMap &m, const char *key, double fallback = 0)
 {
     const QVariant v = m.value(QString::fromLatin1(key));
-    return v.isValid() ? v.toDouble() : fallback;
+    const double d = v.isValid() ? v.toDouble() : fallback;
+    return std::isfinite(d) ? d : fallback;
 }
+
+// A number from a file as an int in [lo, hi] (rounding a huge double to int is undefined).
+int toInt(double v, int lo, int hi) { return int(std::lround(std::clamp(v, double(lo), double(hi)))); }
 
 QColor descriptorColor(const QVariantMap &m)
 {
     const QVariantMap c = m.value(QStringLiteral("Clr ")).toMap();
     if (c.contains(QStringLiteral("redFloat")))
-        return QColor::fromRgbF(num(c, "redFloat"), num(c, "greenFloat"), num(c, "blueFloat"));
-    return QColor(qRound(num(c, "Rd  ")), qRound(num(c, "Grn ")), qRound(num(c, "Bl  ")));
+        return QColor::fromRgbF(std::clamp(num(c, "redFloat"), 0.0, 1.0), std::clamp(num(c, "greenFloat"), 0.0, 1.0),
+                                std::clamp(num(c, "blueFloat"), 0.0, 1.0));
+    return QColor(toInt(num(c, "Rd  "), 0, 255), toInt(num(c, "Grn "), 0, 255), toInt(num(c, "Bl  "), 0, 255));
 }
 
 struct LayerRecord {
@@ -469,7 +500,8 @@ void readLayerInfo(Reader &r, const QByteArray &key, qint64 dataEnd, LayerRecord
         r.u32();  // descriptor version
         const QVariantMap d = DescriptorParser(r).descriptor();
         const bool legacy = d.value(QStringLiteral("useLegacy")).toBool();
-        rec.adjustment = {Adjustment::BrightnessContrast, {qRound(num(d, "Brgh")), qRound(num(d, "Cntr")), legacy ? 1 : 0}};
+        rec.adjustment = {Adjustment::BrightnessContrast,
+                          {toInt(num(d, "Brgh"), -150, 150), toInt(num(d, "Cntr"), -100, 100), legacy ? 1 : 0}};
         if (!legacy)
             rec.approximate = QStringLiteral("Brightness/Contrast (approximated)");
     } else if (key == "levl") {
@@ -569,24 +601,24 @@ LayerStyle styleFromEffects(const QVariantMap &fx, int globalAngle, QStringList 
     if (!shadow.isEmpty()) {
         st.shadow = true;
         st.shadowColor = descriptorColor(shadow);
-        st.shadowOpacity = qRound(num(shadow, "Opct", 75));
-        st.shadowAngle = shadow.value(QStringLiteral("uglg"), true).toBool() ? globalAngle : qRound(num(shadow, "lagl", 120));
-        st.shadowDistance = qRound(num(shadow, "Dstn", 5));
-        st.shadowSize = qRound(num(shadow, "blur", 5));
+        st.shadowOpacity = toInt(num(shadow, "Opct", 75), 0, 100);
+        st.shadowAngle = shadow.value(QStringLiteral("uglg"), true).toBool() ? globalAngle : toInt(num(shadow, "lagl", 120), -360, 360);
+        st.shadowDistance = toInt(num(shadow, "Dstn", 5), 0, 500);
+        st.shadowSize = toInt(num(shadow, "blur", 5), 0, 250);
     }
     const QVariantMap glow = effect("OrGl", "outerGlowMulti");
     if (!glow.isEmpty()) {
         st.glow = true;
         st.glowColor = descriptorColor(glow);
-        st.glowOpacity = qRound(num(glow, "Opct", 75));
-        st.glowSize = std::max(1, int(qRound(num(glow, "blur", 5))));
+        st.glowOpacity = toInt(num(glow, "Opct", 75), 0, 100);
+        st.glowSize = toInt(num(glow, "blur", 5), 1, 250);
     }
     const QVariantMap stroke = effect("FrFX", "frameFXMulti");
     if (!stroke.isEmpty()) {
         st.stroke = true;
         st.strokeColor = descriptorColor(stroke);
-        st.strokeOpacity = qRound(num(stroke, "Opct", 100));
-        st.strokeSize = std::max(1, int(qRound(num(stroke, "Sz  ", 3))));
+        st.strokeOpacity = toInt(num(stroke, "Opct", 100), 0, 100);
+        st.strokeSize = toInt(num(stroke, "Sz  ", 3), 1, 250);
         if (stroke.value(QStringLiteral("Styl")).toString() != QLatin1String("OutF"))
             *notes << QObject::tr("inside/center strokes (shown as outside strokes)");
     }
@@ -600,8 +632,12 @@ LayerStyle styleFromEffects(const QVariantMap &fx, int globalAngle, QStringList 
 
 QRect readRect(Reader &r)
 {
-    const qint32 top = r.i32(), left = r.i32(), bottom = r.i32(), right = r.i32();
-    return QRect(left, top, right - left, bottom - top);
+    const qint64 top = r.i32(), left = r.i32(), bottom = r.i32(), right = r.i32();
+    constexpr qint64 limit = 1 << 24;  // far beyond any real layer, small enough to never overflow
+    if (std::abs(top) > limit || std::abs(left) > limit || bottom < top || right < left || bottom - top > limit
+        || right - left > limit)
+        throw QObject::tr("The file is damaged (invalid layer bounds).");
+    return QRect(int(left), int(top), int(right - left), int(bottom - top));
 }
 
 // Reads the merged (flattened) image Photoshop stores after the layers.
@@ -678,6 +714,8 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
         throw QObject::tr("Only RGB, grayscale and CMYK Photoshop files are supported.");
     if (width <= 0 || height <= 0 || width > 300000 || height > 300000)
         throw QObject::tr("Invalid image size.");
+    if (qint64(width) * height > FileIO::maxImagePixels())
+        throw QObject::tr("The image is too large (%1 × %2 pixels).").arg(width).arg(height);
     const QSize size(width, height);
 
     r.skip(r.u32());  // color mode data
@@ -838,6 +876,7 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                     l.mask = QImage(size, QImage::Format_ARGB32_Premultiplied);
                     l.mask.fill(Qt::white);
                 }
+                sanitizeLayer(l);
                 state.layers.append(l);  // PSD stores layers bottom to top
             }
             r.check();

@@ -8,3 +8,7 @@ target_compile_definitions(pairpaint_ui_test PRIVATE PAIRPAINT_TEST_DATA="${CMAK
 add_test(NAME ui_test COMMAND pairpaint_ui_test)
 # Runs without a display; the test drives the real UI offscreen.
 set_tests_properties(ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
+
+# File-reader fuzzer (see the comment at the top of fuzz_files.cpp).
+qt_add_executable(pairpaint_fuzz fuzz_files.cpp)
+target_link_libraries(pairpaint_fuzz PRIVATE pairpaint_core)

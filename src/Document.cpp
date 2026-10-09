@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QFontMetricsF>
 #include <QTransform>
+#include <cmath>
 #include <QtMath>
 #include <QUndoCommand>
 #include <algorithm>
@@ -354,6 +355,41 @@ QList<QPair<QString, QPainter::CompositionMode>> blendModes()
         {QObject::tr("Color"), Blend::Color},
         {QObject::tr("Luminosity"), Blend::Luminosity},
     };
+}
+
+QPainter::CompositionMode blendModeFromInt(int value)
+{
+    for (const auto &[name, mode] : blendModes())
+        if (int(mode) == value)
+            return mode;
+    return QPainter::CompositionMode_SourceOver;
+}
+
+void sanitizeLayer(Layer &l)
+{
+    auto unit = [](qreal v) { return std::isfinite(v) ? std::clamp(v, 0.0, 1.0) : 1.0; };
+    l.opacity = unit(l.opacity);
+    l.fillOpacity = unit(l.fillOpacity);
+    l.mode = blendModeFromInt(int(l.mode));
+    LayerStyle &s = l.style;
+    s.shadowOpacity = std::clamp(s.shadowOpacity, 0, 100);
+    s.shadowAngle = std::clamp(s.shadowAngle, -360, 360);
+    s.shadowDistance = std::clamp(s.shadowDistance, 0, 500);
+    s.shadowSize = std::clamp(s.shadowSize, 0, 250);
+    s.glowOpacity = std::clamp(s.glowOpacity, 0, 100);
+    s.glowSize = std::clamp(s.glowSize, 1, 250);
+    s.strokeOpacity = std::clamp(s.strokeOpacity, 0, 100);
+    s.strokeSize = std::clamp(s.strokeSize, 1, 250);
+    if (l.text.isValid()) {
+        const int px = l.text.font.pixelSize();
+        l.text.font.setPixelSize(px > 0 ? std::min(px, 2000) : 48);
+        l.text.text.truncate(100000);
+        if (!std::isfinite(l.text.pos.x()) || !std::isfinite(l.text.pos.y())
+            || std::abs(l.text.pos.x()) > 1e6 || std::abs(l.text.pos.y()) > 1e6)
+            l.text.pos = QPointF();
+    }
+    if (l.adjustment.params.size() > 1000)
+        l.adjustment.params.resize(1000);
 }
 
 int LayerStyle::margin() const

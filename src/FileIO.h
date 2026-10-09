@@ -23,4 +23,8 @@ Document *load(const QString &path, QString *error, QString *warning = nullptr);
 bool saveProject(const Document *doc, const QString &path, QString *error);
 bool exportImage(const Document *doc, const QString &path, QString *error);
 
+// Largest image (in pixels) the readers accept; damaged files can claim absurd sizes.
+qint64 maxImagePixels();
+void setMaxImagePixels(qint64 pixels);  // tests and the fuzzer lower it
+
 } // namespace FileIO

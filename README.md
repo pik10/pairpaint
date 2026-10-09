@@ -149,7 +149,14 @@ It also checks PairPaint's rendering of Photoshop-made files (`tests/data/psd-to
 cmake --build build -j && ctest --test-dir build --output-on-failure
 ```
 
-GitHub Actions runs it on Linux, Windows and macOS for every push and pull request.
+GitHub Actions runs it on Linux, Windows and macOS for every push and pull request, and once more
+with AddressSanitizer and UndefinedBehaviorSanitizer together with a short fuzzing run of the file
+readers (`tests/fuzz_files.cpp`, see `tests/data/fuzz/README.md`). For a local sanitizer build:
+
+```sh
+cmake -B build-asan -DPAIRPAINT_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug && cmake --build build-asan
+ctest --test-dir build-asan --output-on-failure
+```
 
 ## License
 

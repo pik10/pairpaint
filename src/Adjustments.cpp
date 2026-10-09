@@ -71,10 +71,44 @@ QList<int> defaults(Adjustment::Type type)
     return v;
 }
 
+// Keeps every setting in its valid range: settings can come from damaged files, and
+// out-of-range values could overflow or divide by zero in the formulas.
+QList<int> validated(Adjustment::Type type, QList<int> v)
+{
+    const QList<FilterParam> ranges = params(type);
+    switch (type) {
+    case Adjustment::Curves:
+        for (int &x : v)
+            x = std::clamp(x, -1, 255);  // points are 0..255; -1 separates the channel curves
+        break;
+    case Adjustment::Levels:
+        for (int i = 0; i < v.size(); ++i)
+            v[i] = std::clamp(v[i], ranges[i % 5].min, ranges[i % 5].max);
+        break;
+    case Adjustment::HueSaturation:
+        for (int i = 0; i < v.size(); ++i) {
+            if (i < 3)
+                v[i] = std::clamp(v[i], ranges[i].min, ranges[i].max);
+            else  // color ranges: four hues (0..360), then hue, saturation, lightness
+                v[i] = (i - 3) % 7 < 4 ? std::clamp(v[i], 0, 360) : std::clamp(v[i], (i - 3) % 7 == 4 ? -180 : -100, (i - 3) % 7 == 4 ? 180 : 100);
+        }
+        break;
+    case Adjustment::BrightnessContrast:
+        for (int i = 0; i < v.size(); ++i)
+            v[i] = i < 2 ? std::clamp(v[i], ranges[i].min, ranges[i].max) : std::clamp(v[i], 0, 1);
+        break;
+    default:
+        for (int i = 0; i < v.size() && i < ranges.size(); ++i)
+            v[i] = std::clamp(v[i], ranges[i].min, ranges[i].max);
+        break;
+    }
+    return v;
+}
+
 QImage apply(const QImage &image, Adjustment::Type type, const QList<int> &p)
 {
     const QList<int> d = defaults(type);
-    const QList<int> v = (type == Adjustment::Curves || p.size() >= d.size()) ? p : d;
+    const QList<int> v = validated(type, (type == Adjustment::Curves || p.size() >= d.size()) ? p : d);
     switch (type) {
     case Adjustment::BrightnessContrast:
         if (v.value(2) == 1)  // Photoshop's legacy formula (from PSD files)
@@ -100,6 +134,8 @@ QImage apply(const QImage &image, Adjustment::Type type, const QList<int> &p)
         int pos = int(main.size()) + 1;  // after the -1 separator
         for (int c = 0; c < 3 && pos < v.size(); ++c) {
             const int count = v[pos++];
+            if (count < 0 || pos + 2 * qsizetype(count) > v.size())
+                break;  // damaged data
             const QList<int> own = Filters::curveLut(v.mid(pos, 2 * count));
             pos += 2 * count;
             for (int i = 0; i < 256; ++i)

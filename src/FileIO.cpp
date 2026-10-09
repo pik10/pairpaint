@@ -82,7 +82,8 @@ Document *loadProject(const QString &path, QString *error)
     DocState s;
     qint32 active = 0, count = 0;
     in >> s.size >> active >> count;
-    if (in.status() != QDataStream::Ok || s.size.isEmpty() || count <= 0 || count > 10000) {
+    if (in.status() != QDataStream::Ok || s.size.isEmpty() || count <= 0 || count > 10000
+        || qint64(s.size.width()) * s.size.height() > FileIO::maxImagePixels()) {
         *error = QObject::tr("The file is damaged.");
         return nullptr;
     }
@@ -93,7 +94,7 @@ Document *loadProject(const QString &path, QString *error)
         QByteArray png;
         in >> l.name >> l.visible >> opacity >> mode >> png;
         l.opacity = opacity;
-        l.mode = QPainter::CompositionMode(mode);
+        l.mode = blendModeFromInt(mode);  // never cast an unknown number to the enum
         l.image = decodeImage(png, s.size);
         if (version >= 2) {
             QByteArray maskPng;
@@ -140,6 +141,7 @@ Document *loadProject(const QString &path, QString *error)
             in >> l.clipped >> fill;
             l.fillOpacity = fill;
         }
+        sanitizeLayer(l);
         s.layers.append(l);
     }
     if (in.status() != QDataStream::Ok) {
@@ -153,6 +155,13 @@ Document *loadProject(const QString &path, QString *error)
 } // namespace
 
 namespace FileIO {
+
+namespace {
+qint64 g_maxImagePixels = 250'000'000;  // about 1 GB per layer
+}
+
+qint64 maxImagePixels() { return g_maxImagePixels; }
+void setMaxImagePixels(qint64 pixels) { g_maxImagePixels = pixels; }
 
 QString openFilter()
 {

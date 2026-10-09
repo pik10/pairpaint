@@ -31,3 +31,43 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
+
+  # Memory errors and undefined behavior: the tests plus a short fuzzing run of the file
+  # readers, built with AddressSanitizer and UndefinedBehaviorSanitizer.
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.*'
+          cache: true
+
+      - name: Build with sanitizers
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DPAIRPAINT_SANITIZE=ON
+          cmake --build build --parallel
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Fuzz the file readers
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          # A different random seed each run widens coverage; the seed is in the log to reproduce.
+          echo "fuzz seed: ${{ github.run_number }}"
+          build/tests/pairpaint_fuzz 3000 ${{ github.run_number }} tests/data/psd-tools/*.psd tests/data/fuzz/*.p*
+
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failure
+          path: fuzz-*

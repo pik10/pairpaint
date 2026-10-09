@@ -95,6 +95,11 @@ struct DocState {
 enum class SelectionOp { Replace, Add, Subtract, Intersect };
 
 QList<QPair<QString, QPainter::CompositionMode>> blendModes();
+// A blend mode stored as a number in a file; unknown values become Normal.
+QPainter::CompositionMode blendModeFromInt(int value);
+// Clamps values read from a file into the ranges PairPaint supports, so damaged or
+// malicious files can't cause undefined behavior or huge allocations.
+void sanitizeLayer(Layer &layer);
 QImage renderText(const TextData &text, const QSize &size);
 QRectF textBounds(const TextData &text);
 QRect alphaBounds(const QImage &image);  // bounding rect of non-transparent pixels
