@@ -11,8 +11,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QUndoStack>
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
@@ -25,6 +27,13 @@ struct Autosave::Job {
 };
 
 namespace {
+
+// Session folders locked by this process (normally one; tests make several).
+QSet<QString> &ownDirs()
+{
+    static QSet<QString> dirs;
+    return dirs;
+}
 
 QString copyFile(const QString &dir, int id) { return dir + QStringLiteral("/%1.pairpaint").arg(id); }
 QString infoFile(const QString &dir, int id) { return dir + QStringLiteral("/%1.json").arg(id); }
@@ -48,6 +57,7 @@ Autosave::Autosave(const QString &root, int intervalMs, QObject *parent) : QObje
     m_lock = std::make_unique<QLockFile>(m_dir + QStringLiteral("/lock"));
     m_lock->setStaleLockTime(0);  // only a lock whose process has ended is stale, however old
     m_lock->tryLock(0);
+    ownDirs().insert(QFileInfo(m_dir).absoluteFilePath());
     connect(&m_watcher, &QFutureWatcher<void>::finished, this, &Autosave::finished);
     connect(&m_timer, &QTimer::timeout, this, &Autosave::saveNow);
     m_retry.setSingleShot(true);
@@ -62,6 +72,7 @@ Autosave::~Autosave()
     m_timer.stop();
     m_retry.stop();
     m_watcher.waitForFinished();
+    ownDirs().remove(QFileInfo(m_dir).absoluteFilePath());
     if (!m_dir.isEmpty()) {
         m_lock->unlock();
         QDir(m_dir).removeRecursively();
@@ -72,6 +83,7 @@ void Autosave::abandon()
 {
     m_watcher.waitForFinished();
     m_lock->unlock();
+    ownDirs().remove(QFileInfo(m_dir).absoluteFilePath());
     m_dir.clear();
 }
 
@@ -125,19 +137,18 @@ void Autosave::saveNow()
     if (jobs.isEmpty())
         return;
     m_watcher.setFuture(QtConcurrent::run([dir = m_dir, jobs] {
+        QList<int> failed;
         for (const Job &job : jobs) {
             QString error;
-            if (!FileIO::saveProjectState(job.state, copyFile(dir, job.id), &error))
-                continue;
             QSaveFile info(infoFile(dir, job.id));
-            if (info.open(QIODevice::WriteOnly)) {
-                const QJsonObject o{{QStringLiteral("original"), job.originalPath},
-                                    {QStringLiteral("name"), job.name},
-                                    {QStringLiteral("saved"), QDateTime::currentDateTime().toString(Qt::ISODate)}};
-                info.write(QJsonDocument(o).toJson());
-                info.commit();
-            }
+            const QJsonObject o{{QStringLiteral("original"), job.originalPath},
+                                {QStringLiteral("name"), job.name},
+                                {QStringLiteral("saved"), QDateTime::currentDateTime().toString(Qt::ISODate)}};
+            if (!FileIO::saveProjectState(job.state, copyFile(dir, job.id), &error) || !info.open(QIODevice::WriteOnly)
+                || info.write(QJsonDocument(o).toJson()) < 0 || !info.commit())
+                failed << job.id;  // e.g. the disk is full: tried again on the next tick
         }
+        return failed;
     }));
 }
 
@@ -149,8 +160,17 @@ void Autosave::waitForSaves()
 
 void Autosave::finished()
 {
-    // Documents saved or closed while their copy was being written: remove the late copy.
+    // Copies that couldn't be written: the document still needs one.
     const QList<int> saved = std::exchange(m_saving, {});
+    if (!saved.isEmpty() && m_watcher.future().resultCount() > 0) {
+        for (int id : m_watcher.result()) {
+            if (auto it = m_entries.find(id); it != m_entries.end() && saved.contains(id)) {
+                it->dirty = true;
+                it->hasCopy = false;
+            }
+        }
+    }
+    // Documents saved or closed while their copy was being written: remove the late copy.
     for (int id : saved) {
         const auto it = m_entries.constFind(id);
         if (it == m_entries.cend() || !it->doc || !it->doc->isModified())
@@ -174,11 +194,18 @@ QStringList Autosave::orphanDirs() const
     const QFileInfoList entries = QDir(m_root).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QFileInfo &fi : entries) {
         const QString dir = fi.absoluteFilePath();
-        if (dir == QFileInfo(m_dir).absoluteFilePath())
+        if (ownDirs().contains(dir))
             continue;
         QLockFile lock(dir + QStringLiteral("/lock"));
         lock.setStaleLockTime(0);
-        if (lock.tryLock(0)) {  // nobody holds it: that session is gone
+        // A lock left by a crash whose process ID now belongs to this very process (after a
+        // reboot) looks held by a running PairPaint; it isn't, since it's none of this process's.
+        qint64 pid = 0;
+        QString host, app;
+        if (!lock.tryLock(0) && lock.getLockInfo(&pid, &host, &app) && pid == QCoreApplication::applicationPid()
+            && host == QSysInfo::machineHostName())
+            lock.removeStaleLockFile();
+        if (lock.isLocked() || lock.tryLock(0)) {  // nobody else holds it: that session is gone
             lock.unlock();
             dirs << dir;
         }
@@ -203,6 +230,18 @@ QList<Autosave::Recovered> Autosave::findOrphans() const
     }
     std::sort(found.begin(), found.end(), [](const Recovered &a, const Recovered &b) { return a.saved < b.saved; });
     return found;
+}
+
+void Autosave::discardRecovered(const QList<Recovered> &copies)
+{
+    for (const Recovered &r : copies) {
+        QFile::remove(r.copyPath);
+        QFile::remove(QFileInfo(r.copyPath).path() + QLatin1Char('/') + QFileInfo(r.copyPath).completeBaseName()
+                      + QStringLiteral(".json"));
+    }
+    for (const QString &dir : orphanDirs())
+        if (QDir(dir).entryList({QStringLiteral("*.json")}, QDir::Files).isEmpty())
+            QDir(dir).removeRecursively();
 }
 
 void Autosave::discardOrphans()

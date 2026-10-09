@@ -70,7 +70,12 @@ Canvas::Canvas(Document *doc, ToolManager *tools, QWidget *parent)
         fitToWindow(false);
     });
     connect(doc, &Document::selectionChanged, this, &Canvas::rebuildAnts);
-    connect(doc, &Document::guidesChanged, this, qOverload<>(&Canvas::update));
+    connect(doc, &Document::guidesChanged, this, [this] {
+        // The guide being dragged may have moved in the list (e.g. Ctrl+Z mid-drag): drop the drag.
+        if (m_guideDrag.active && m_guideDrag.index >= 0)
+            m_guideDrag.active = false;
+        update();
+    });
     connect(tools, &ToolManager::toolChanged, this, [this] {
         m_hoverZone = -1;
         updateCursor();
@@ -594,8 +599,13 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e)
         const int r = rulerSize();
         const bool onCanvas = QRectF(rect()).adjusted(r, r, 0, 0).contains(e->position());
         const GuideDrag d = m_guideDrag;
-        if (d.index < 0 && onCanvas)
+        if (d.index < 0 && onCanvas) {
+            if (!m_tools->settings()->showGuides) {  // a hidden guide would just vanish
+                m_tools->settings()->showGuides = true;
+                emit guidesShown();
+            }
             m_doc->addGuide({d.orientation, d.pos});
+        }
         else if (d.index >= 0 && onCanvas)
             m_doc->moveGuide(d.index, d.pos);
         else if (d.index >= 0)

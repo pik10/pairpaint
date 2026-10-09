@@ -1182,12 +1182,13 @@ private:
             for (int i = m_doc->groupEndFor(header) + 1; i < header; ++i) {
                 if (m_doc->layer(i).kind == LayerKind::Normal) {
                     m_groupMembers << i;
-                    m_bounds |= alphaBounds(m_doc->layer(i).image);
+                    if (m_settings->snap)
+                        m_bounds |= alphaBounds(m_doc->layer(i).image);
                 }
             }
             return;
         }
-        if (!m_doc->editingMask()) {  // what is being moved, for snapping
+        if (m_settings->snap && !m_doc->editingMask()) {  // what is being moved, for snapping
             m_bounds = alphaBounds(m_doc->targetImage());
             if (m_doc->hasSelection())
                 m_bounds &= m_doc->selectionBounds();

@@ -26,6 +26,7 @@
 #include <limits>
 #include <QImageReader>
 #include <QKeyEvent>
+#include <QLockFile>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainterPath>
@@ -301,6 +302,22 @@ static void testGuides(MainWindow &w, ToolManager *tools, ToolSettings *settings
     CHECK(d->guides().isEmpty());
     d->undoStack()->undo();  // brings it back
     CHECK(has(*d, Qt::Horizontal, 150));
+
+    // Dragging a guide out while guides are hidden shows them (instead of a guide that vanishes).
+    settings->showGuides = false;
+    tools->setCurrent(Tool::RectSelect);
+    dragWidget(ruler, c->mapFromImage(QPointF(200, 60)));
+    CHECK(settings->showGuides && has(*d, Qt::Horizontal, 60));
+    QAction *showGuides = action(&w, "Show Guides");
+    CHECK(showGuides && showGuides->isChecked());
+    // Undo during a guide drag (the list changes under it): the drag is dropped, nothing else moves.
+    tools->setCurrent(Tool::Move);
+    const int before = int(d->guides().size());
+    mouse(c, QEvent::MouseButtonPress, c->mapFromImage(QPointF(300, 150)), Qt::LeftButton, Qt::LeftButton);
+    mouse(c, QEvent::MouseMove, c->mapFromImage(QPointF(300, 170)), Qt::NoButton, Qt::LeftButton);
+    d->undoStack()->undo();  // removes the guide at 60
+    mouse(c, QEvent::MouseButtonRelease, QPointF(c->width() / 2.0, 8), Qt::LeftButton, Qt::NoButton);
+    CHECK(int(d->guides().size()) == before - 1 && has(*d, Qt::Horizontal, 150));
 
     // Snapping: a marquee started 5 px from the guide starts on it.
     tools->setCurrent(Tool::RectSelect);
@@ -1352,6 +1369,19 @@ static void testHeic()
     // depends on whether the system's HEIF and HEVC codecs are installed.
     const bool expected = !qEnvironmentVariable("PAIRPAINT_EXPECT_HEIF").isEmpty();
     CHECK(Heif::isHeif(sample) && !Heif::isHeif(QStringLiteral(PAIRPAINT_TEST_DATA) + "/fuzz/seed-small.pairpaint"));
+    // AVIF is left to Qt's plugins; a generic HEIF ("mif1") with HEVC images is ours.
+    auto brands = [&](const QByteArray &major, const QByteArray &compatible) {
+        QByteArray box;
+        const quint32 size = 16 + quint32(compatible.size());
+        box.append(char(size >> 24)).append(char(size >> 16)).append(char(size >> 8)).append(char(size));
+        box += "ftyp" + major + QByteArray(4, 0) + compatible + QByteArray(64, 0);
+        QFile f(tmpPath("brands.heif"));
+        f.open(QIODevice::WriteOnly);
+        f.write(box);
+        f.close();
+        return Heif::isHeif(tmpPath("brands.heif"));
+    };
+    CHECK(!brands("avif", "mif1miafMA1B") && !brands("mif1", "avifmiaf") && brands("mif1", "miafheic") && brands("heix", ""));
     QString err, warn;
     if (!Heif::hasDecoder()) {  // through a Qt plugin: show what it returns, to diagnose color problems
         QImageReader reader(sample);
@@ -1445,6 +1475,22 @@ static void testAutosave()
         a.saveNow();
         a.waitForSaves();
         CHECK(copies(a.sessionDir()) == 1);
+#ifndef Q_OS_WIN
+        // A copy that can't be written (here: a read-only folder, as with a full disk) isn't
+        // counted as saved; the next tick writes it.
+        d.addLayer();
+        QFile::setPermissions(a.sessionDir(), QFile::ReadOwner | QFile::ExeOwner);
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(!a.hasCopy(&d));
+        QFile::setPermissions(a.sessionDir(), QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(a.hasCopy(&d));
+        Document *latest = FileIO::load(a.sessionDir() + "/1.pairpaint", &err);
+        CHECK(latest && latest->layerCount() == d.layerCount());
+        delete latest;
+#endif
     }  // closing the document, then a normal exit, leaves nothing behind
     CHECK(sessions() == 0);
     {
@@ -1495,6 +1541,26 @@ static void testAutosave()
         CHECK(junk.open(QIODevice::WriteOnly) && junk.write("PPNT garbage") > 0);
         CHECK(info.open(QIODevice::WriteOnly) && info.write(R"({"name": "broken.psd", "saved": "2026-01-01T10:00:00"})") > 0);
     }
+    // A crashed session whose leftover lock names this very process (its ID reused after a
+    // reboot; Qt can't tell reboots apart on Windows): a real lock's contents, no longer held.
+    {
+        QDir().mkpath(root + "/reused-pid");
+        QByteArray contents;
+        {
+            QLockFile real(root + "/reused-pid/lock");
+            CHECK(real.tryLock(0));
+            QFile lf(root + "/reused-pid/lock");
+            CHECK(lf.open(QIODevice::ReadOnly));
+            contents = lf.readAll();
+        }  // released and removed here
+        QFile left(root + "/reused-pid/lock");
+        CHECK(left.open(QIODevice::WriteOnly) && left.write(contents) == contents.size());
+        left.close();
+        Document r(QSize(10, 10), Qt::white);
+        CHECK(FileIO::saveProject(&r, root + "/reused-pid/1.pairpaint", &err));
+        QFile info(root + "/reused-pid/1.json");
+        CHECK(info.open(QIODevice::WriteOnly) && info.write(R"({"name": "reused.png", "saved": "2026-02-01T10:00:00"})") > 0);
+    }
     // A session still running is never offered, even when its lock file is old.
     Autosave running(root, 0);
     Document busyDoc(QSize(20, 20), Qt::white);
@@ -1513,18 +1579,26 @@ static void testAutosave()
     QStringList names;
     for (const auto &r : found)
         names << r.name;
-    CHECK(found.size() == 3 && names.first() == "broken.psd");  // oldest first
-    CHECK(names.contains("photo.png") && names.contains(untitledName));
+    CHECK(found.size() == 4 && names.first() == "broken.psd");  // oldest first
+    CHECK(names.contains("photo.png") && names.contains(untitledName) && names.contains("reused.png"));
 
     auto *win = new MainWindow;
-    const QStringList failed = win->restoreRecovered(found);
-    CHECK(failed == QStringList{"broken.psd"});
+    const QList<Autosave::Recovered> failed = win->restoreRecovered(found);
+    CHECK(failed.size() == 1 && failed.first().name == "broken.psd");
     Document *recovered = nullptr;
     for (auto *c : win->findChildren<Canvas *>())
         if (c->document()->filePath() == tmpPath("photo.png"))
             recovered = c->document();
     CHECK(recovered && recovered->isModified() && recovered->layerCount() == 2
           && recovered->layer(1).name == "Painted");
+    // Only the copies that opened are removed; the damaged one stays for another try.
+    QList<Autosave::Recovered> restored;
+    for (const auto &r : found)
+        if (r.name != "broken.psd")
+            restored << r;
+    next.discardRecovered(restored);
+    const QList<Autosave::Recovered> left = next.findOrphans();
+    CHECK(left.size() == 1 && left.first().name == "broken.psd");
     next.discardOrphans();
     CHECK(next.findOrphans().isEmpty());
     CHECK(copies(running.sessionDir()) == 1);  // the running session's copy is untouched

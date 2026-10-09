@@ -56,6 +56,7 @@ public:
 
 signals:
     void cursorMoved(const QPointF &imagePos);
+    void guidesShown();  // a guide was dragged out while guides were hidden, so they were turned on
     void zoomChanged(qreal zoom);
 
 protected:

@@ -32,8 +32,8 @@ public:
     Autosave *autosave() const { return m_autosave; }
     // After a crash: offers to reopen the documents that had unsaved changes.
     void offerRecovery();
-    // Opens recovery copies as unsaved documents; returns the names that couldn't be opened.
-    QStringList restoreRecovered(const QList<Autosave::Recovered> &copies);
+    // Opens recovery copies as unsaved documents; returns the copies that couldn't be opened.
+    QList<Autosave::Recovered> restoreRecovered(const QList<Autosave::Recovered> &copies);
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -91,6 +91,7 @@ private:
     ToolSettings *m_settings;
     ToolManager *m_tools;
     Autosave *m_autosave = nullptr;
+    QAction *m_showGuidesAction = nullptr;
     QUndoGroup *m_undoGroup;
     QTabWidget *m_tabs;
     LayersPanel *m_layers;

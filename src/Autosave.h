@@ -52,6 +52,8 @@ public:
     QList<Recovered> findOrphans() const;
     // Removes the folders of crashed sessions (after their copies were recovered or discarded).
     void discardOrphans();
+    // Removes these recovered copies only, and folders left without copies; other copies stay.
+    void discardRecovered(const QList<Recovered> &copies);
 
 private:
     struct Entry {
@@ -72,6 +74,6 @@ private:
     QHash<int, Entry> m_entries;
     int m_nextId = 1;
     std::function<bool()> m_busy;
-    QFutureWatcher<void> m_watcher;
+    QFutureWatcher<QList<int>> m_watcher;  // the job's result: ids whose copy couldn't be written
     QList<int> m_saving;  // ids being written by the running job
 };

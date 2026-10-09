@@ -521,6 +521,8 @@ void Document::finish(const QString &text, const DocState &before, int changes, 
         emit imageChanged(rect());
     if ((changes & Selection) || before.selection.cacheKey() != m_state.selection.cacheKey())
         emit selectionChanged();
+    if (before.guides != m_state.guides)  // added, moved, or carried along by a crop, rotation, ...
+        emit guidesChanged();
 }
 
 void Document::setActiveIndex(int index)
@@ -1269,7 +1271,6 @@ void Document::addGuide(const Guide &g)
     const DocState before = m_state;
     m_state.guides.append(g);
     finish(tr("New Guide"), before, 0);
-    emit guidesChanged();
 }
 
 void Document::moveGuide(int i, qreal pos)
@@ -1279,7 +1280,6 @@ void Document::moveGuide(int i, qreal pos)
     const DocState before = m_state;
     m_state.guides[i].pos = pos;
     finish(tr("Move Guide"), before, 0);
-    emit guidesChanged();
 }
 
 void Document::removeGuide(int i)
@@ -1289,7 +1289,6 @@ void Document::removeGuide(int i)
     const DocState before = m_state;
     m_state.guides.removeAt(i);
     finish(tr("Delete Guide"), before, 0);
-    emit guidesChanged();
 }
 
 void Document::clearGuides()
@@ -1299,7 +1298,6 @@ void Document::clearGuides()
     const DocState before = m_state;
     m_state.guides.clear();
     finish(tr("Clear Guides"), before, 0);
-    emit guidesChanged();
 }
 
 namespace {

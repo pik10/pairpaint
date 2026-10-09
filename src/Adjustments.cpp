@@ -222,7 +222,8 @@ QList<int> withMainParams(Adjustment::Type type, const QList<int> &params, const
 QList<int> autoLevels(const QImage &image, Auto mode)
 {
     QList<int> result = defaults(Adjustment::Levels);
-    const auto hist = Filters::channelHistograms(image);
+    const QImage img = image.convertToFormat(QImage::Format_ARGB32);  // once, for both passes
+    const auto hist = Filters::channelHistograms(img);
     const qint64 total = std::accumulate(hist[0].begin(), hist[0].end(), qint64(0));
     if (total == 0)
         return result;
@@ -256,7 +257,6 @@ QList<int> autoLevels(const QImage &image, Auto mode)
     if (mode == Auto::Color) {
         // Average the near-gray midtones after stretching, then bend each channel's gamma so
         // that average becomes neutral: this removes a color cast.
-        const QImage img = image.convertToFormat(QImage::Format_ARGB32);
         const int step = std::max(1, int(std::sqrt(double(img.width()) * img.height() / 1e6)));
         double sum[3] = {};
         qint64 count = 0;

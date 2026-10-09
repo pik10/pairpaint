@@ -472,7 +472,8 @@ void MainWindow::createMenus()
         return a;
     };
     toggle(tr("&Rulers"), QKeySequence("Ctrl+R"), &m_settings->showRulers, "view/rulers");
-    QAction *showGuides = toggle(tr("Show &Guides"), QKeySequence("Ctrl+;"), &m_settings->showGuides, "view/guides");
+    QAction *showGuides = m_showGuidesAction =
+        toggle(tr("Show &Guides"), QKeySequence("Ctrl+;"), &m_settings->showGuides, "view/guides");
     toggle(tr("&Snap"), QKeySequence("Ctrl+Shift+;"), &m_settings->snap, "view/snap");
     addAction(view, tr("&New Guide…"), {}, [this, showGuides] {
         Document *d = doc();
@@ -743,6 +744,7 @@ void MainWindow::addDocument(Document *doc)
     connect(doc, &Document::titleChanged, this, [this, c] { updateTabTitle(c); });
     connect(doc, &Document::sizeChanged, this, &MainWindow::updateStatus);
     connect(c, &Canvas::zoomChanged, this, &MainWindow::updateStatus);
+    connect(c, &Canvas::guidesShown, this, [this] { m_showGuidesAction->setChecked(true); });
     connect(c, &Canvas::cursorMoved, this, [this](const QPointF &p) {
         m_posLabel->setText(QStringLiteral("X: %1  Y: %2").arg(qFloor(p.x())).arg(qFloor(p.y())));
     });
@@ -899,25 +901,38 @@ void MainWindow::offerRecovery()
             == QMessageBox::Yes)
             m_autosave->discardOrphans();
     } else if (box.clickedButton() == recover) {
-        const QStringList failed = restoreRecovered(copies);
-        if (failed.isEmpty())
-            m_autosave->discardOrphans();
-        else  // keep the copies, so nothing is lost
+        const QList<Autosave::Recovered> failed = restoreRecovered(copies);
+        // The recovered images now have copies in this session (written right away); the old
+        // copies of those go, and only the ones that couldn't be opened are kept.
+        m_autosave->saveNow();
+        m_autosave->waitForSaves();
+        QList<Autosave::Recovered> restored;
+        QStringList failedNames;
+        for (const Autosave::Recovered &r : copies) {
+            const bool ok = std::none_of(failed.begin(), failed.end(),
+                                         [&](const Autosave::Recovered &f) { return f.copyPath == r.copyPath; });
+            if (ok)
+                restored << r;
+            else
+                failedNames << r.name;
+        }
+        m_autosave->discardRecovered(restored);
+        if (!failed.isEmpty())
             QMessageBox::warning(this, tr("Recover Unsaved Work"),
                                  tr("These couldn't be recovered:\n%1\n\nThe copies are kept in %2.")
-                                     .arg(failed.join(QLatin1Char('\n')),
+                                     .arg(failedNames.join(QLatin1Char('\n')),
                                           QDir::toNativeSeparators(QFileInfo(copies.first().copyPath).absolutePath())));
     }
 }
 
-QStringList MainWindow::restoreRecovered(const QList<Autosave::Recovered> &copies)
+QList<Autosave::Recovered> MainWindow::restoreRecovered(const QList<Autosave::Recovered> &copies)
 {
-    QStringList failed;
+    QList<Autosave::Recovered> failed;
     for (const Autosave::Recovered &r : copies) {
         QString error;
         Document *d = FileIO::load(r.copyPath, &error);
         if (!d) {
-            failed << r.name;
+            failed << r;
             continue;
         }
         if (!r.originalPath.isEmpty())

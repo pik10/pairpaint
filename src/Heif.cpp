@@ -12,6 +12,7 @@
 #include <QObject>
 #include <QScopeGuard>
 #include <QTransform>
+#include <QtEndian>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -278,9 +279,22 @@ bool isHeif(const QString &path)
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         return false;
-    const QByteArray head = f.read(12);
-    static const QByteArrayList brands = {"heic", "heix", "heim", "heis", "hevc", "hevx", "mif1", "msf1", "avif", "avis"};
-    return head.size() == 12 && head.mid(4, 4) == "ftyp" && brands.contains(head.mid(8, 4));
+    // The "ftyp" box lists the file's brands: HEVC-coded HEIF (what iPhones write) is ours to
+    // decode; AVIF and other HEIF flavors are left to Qt's plugins.
+    const QByteArray head = f.read(256);
+    if (head.size() < 16 || head.mid(4, 4) != "ftyp")
+        return false;
+    const int boxSize = int(qFromBigEndian<quint32>(head.constData()));
+    const QByteArray major = head.mid(8, 4);
+    if (major == "avif" || major == "avis")
+        return false;
+    static const QByteArrayList hevc = {"heic", "heix", "heim", "heis", "hevc", "hevx"};
+    if (hevc.contains(major))
+        return true;
+    for (int at = 16; at + 4 <= std::min(boxSize, int(head.size())); at += 4)  // compatible brands
+        if (hevc.contains(head.mid(at, 4)))
+            return true;
+    return false;
 }
 
 QImage read(const QString &path, QString *error)

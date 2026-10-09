@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+Found by a code review of 0.4 to 0.7.2:
+- Autosave: a recovery copy that couldn't be written (e.g. a full disk) counted as saved, so it
+  wasn't tried again until the image changed. It is now retried on the next tick.
+- Crash recovery: when one recovery copy was damaged, the copies that were recovered fine were
+  offered again on the next start (and could reopen as stale duplicates). Now only the damaged
+  copy is kept.
+- Crash recovery on Windows: after a reboot, a crashed session could be missed when PairPaint
+  happened to get the same process ID.
+- AVIF images were handed to the HEIC decoder, which can't read them; they go to Qt's image
+  plugins again.
+- Dragging a guide out of a ruler while guides were hidden added an invisible guide; guides are
+  now shown. Undo during a guide drag could move or delete the wrong guide.
+- The Move tool no longer scans the whole layer on every click when snapping is off, and Auto
+  Color converts the image once instead of twice.
+
 ## 0.7.2 — 2026-10-09
 
 ### Changed
