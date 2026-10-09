@@ -52,6 +52,7 @@ private:
     void runFilter(const QString &title, const QList<FilterParam> &params, const FilterFunc &fn);
     void runAdjustment(Adjustment::Type type);
     void colorRange();
+    void layerStyle();
     ParamEditor *adjustmentEditor(Adjustment::Type type, const QList<int> &values, const QImage &histogramSource);
     void newAdjustmentLayer(Adjustment::Type type);
     void editLayer(int index);  // adjustment parameters or text

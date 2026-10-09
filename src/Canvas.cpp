@@ -170,7 +170,9 @@ void Canvas::resizeEvent(QResizeEvent *)
 
 void Canvas::onImageChanged(const QRect &r)
 {
-    const QRect rr = r & m_doc->rect();
+    // Layer effects (e.g. a drop shadow) change pixels beyond the edited area.
+    const int m = m_doc->effectsMargin();
+    const QRect rr = r.adjusted(-m, -m, m, m) & m_doc->rect();
     if (m_cache.size() != m_doc->size() || rr == m_doc->rect()) {
         m_cache = m_doc->flattened();
     } else if (!rr.isEmpty()) {

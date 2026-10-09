@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFontComboBox>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -245,4 +246,134 @@ void TextDialog::editLayer(Document *doc, int index, QWidget *parent)
     TextDialog dlg(doc->layer(index).text, parent);
     if (dlg.exec() == QDialog::Accepted && dlg.data().isValid())
         doc->setText(index, dlg.data());
+}
+
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A button showing a color; clicking it opens a color picker.
+QPushButton *colorButton(QColor *color, QWidget *parent, const std::function<void()> &changed)
+{
+    auto *b = new QPushButton(parent);
+    b->setFixedWidth(48);
+    auto refresh = [b, color] {
+        b->setStyleSheet(QStringLiteral("background-color: %1; border: 1px solid #888;").arg(color->name()));
+    };
+    refresh();
+    QObject::connect(b, &QPushButton::clicked, b, [b, color, refresh, changed] {
+        const QColor c = QColorDialog::getColor(*color, b->window());
+        if (c.isValid()) {
+            *color = c;
+            refresh();
+            changed();
+        }
+    });
+    return b;
+}
+
+} // namespace
+
+LayerStyleDialog::LayerStyleDialog(Document *doc, int layer, QWidget *parent)
+    : QDialog(parent), m_doc(doc), m_layer(layer), m_before(doc->state()), m_original(doc->layer(layer).style)
+{
+    setWindowTitle(tr("Layer Style — %1").arg(doc->layer(layer).name));
+    const LayerStyle &s = m_original;
+    m_shadowColor = s.shadowColor;
+    m_glowColor = s.glowColor;
+    m_strokeColor = s.strokeColor;
+    auto update = [this] { preview(); };
+
+    auto section = [&](const QString &title, bool on) {
+        auto *box = new QGroupBox(title);
+        box->setCheckable(true);
+        box->setChecked(on);
+        connect(box, &QGroupBox::toggled, this, update);
+        return box;
+    };
+    auto spinBox = [&](int min, int max, int value, const QString &suffix) {
+        auto *sp = new QSpinBox;
+        sp->setRange(min, max);
+        sp->setValue(value);
+        sp->setSuffix(suffix);
+        connect(sp, &QSpinBox::valueChanged, this, update);
+        return sp;
+    };
+
+    m_shadow = section(tr("Drop Shadow"), s.shadow);
+    m_shadowOpacity = spinBox(0, 100, s.shadowOpacity, QStringLiteral("%"));
+    m_shadowAngle = spinBox(-180, 360, s.shadowAngle, QStringLiteral("°"));
+    m_shadowDistance = spinBox(0, 500, s.shadowDistance, tr(" px"));
+    m_shadowSize = spinBox(0, 250, s.shadowSize, tr(" px"));
+    auto *sf = new QFormLayout(m_shadow);
+    sf->addRow(tr("Color:"), colorButton(&m_shadowColor, this, update));
+    sf->addRow(tr("Opacity:"), m_shadowOpacity);
+    sf->addRow(tr("Angle:"), m_shadowAngle);
+    sf->addRow(tr("Distance:"), m_shadowDistance);
+    sf->addRow(tr("Size:"), m_shadowSize);
+
+    m_glow = section(tr("Outer Glow"), s.glow);
+    m_glowOpacity = spinBox(0, 100, s.glowOpacity, QStringLiteral("%"));
+    m_glowSize = spinBox(1, 250, s.glowSize, tr(" px"));
+    auto *gf = new QFormLayout(m_glow);
+    gf->addRow(tr("Color:"), colorButton(&m_glowColor, this, update));
+    gf->addRow(tr("Opacity:"), m_glowOpacity);
+    gf->addRow(tr("Size:"), m_glowSize);
+
+    m_stroke = section(tr("Stroke (outside)"), s.stroke);
+    m_strokeOpacity = spinBox(0, 100, s.strokeOpacity, QStringLiteral("%"));
+    m_strokeSize = spinBox(1, 250, s.strokeSize, tr(" px"));
+    auto *kf = new QFormLayout(m_stroke);
+    kf->addRow(tr("Color:"), colorButton(&m_strokeColor, this, update));
+    kf->addRow(tr("Opacity:"), m_strokeOpacity);
+    kf->addRow(tr("Size:"), m_strokeSize);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    auto *layout = new QVBoxLayout(this);
+    layout->addWidget(m_shadow);
+    layout->addWidget(m_glow);
+    layout->addWidget(m_stroke);
+    layout->addWidget(buttons);
+}
+
+LayerStyle LayerStyleDialog::current() const
+{
+    LayerStyle s;
+    s.shadow = m_shadow->isChecked();
+    s.shadowColor = m_shadowColor;
+    s.shadowOpacity = m_shadowOpacity->value();
+    s.shadowAngle = m_shadowAngle->value();
+    s.shadowDistance = m_shadowDistance->value();
+    s.shadowSize = m_shadowSize->value();
+    s.glow = m_glow->isChecked();
+    s.glowColor = m_glowColor;
+    s.glowOpacity = m_glowOpacity->value();
+    s.glowSize = m_glowSize->value();
+    s.stroke = m_stroke->isChecked();
+    s.strokeColor = m_strokeColor;
+    s.strokeOpacity = m_strokeOpacity->value();
+    s.strokeSize = m_strokeSize->value();
+    return s;
+}
+
+void LayerStyleDialog::preview()
+{
+    m_doc->layer(m_layer).style = current();
+    m_doc->notifyImageChanged();
+}
+
+void LayerStyleDialog::done(int result)
+{
+    if (result == QDialog::Accepted && !(current() == m_original)) {
+        m_doc->layer(m_layer).style = current();
+        m_doc->commit(current().any() ? tr("Layer Style") : tr("Clear Layer Style"), m_before);
+        m_doc->notifyImageChanged();
+        m_doc->notifyStructureChanged();
+    } else {
+        m_doc->layer(m_layer).style = m_original;
+        m_doc->notifyImageChanged();
+    }
+    QDialog::done(result);
 }

@@ -501,25 +501,39 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
     QDataStream li(&layerInfo, QIODevice::WriteOnly);
     li.setByteOrder(QDataStream::BigEndian);
 
-    QList<const Layer *> layers;
-    int skipped = 0;
+    QList<Layer> layers;
+    int skipped = 0, baked = 0;
     for (int i = 0; i < doc->layerCount(); ++i) {
-        if (doc->layer(i).isAdjustment())
+        Layer l = doc->layer(i);
+        if (l.isAdjustment()) {
             ++skipped;
-        else
-            layers << &doc->layer(i);
+            continue;
+        }
+        if (l.style.any()) {
+            // PairPaint effects are not written as Photoshop effects; merge them into the pixels.
+            l.image = doc->renderLayer(i);
+            l.mask = QImage();
+            l.style = LayerStyle();
+            ++baked;
+        }
+        layers << l;
     }
+    QStringList notes;
     if (skipped)
-        *warning = QObject::tr("%n adjustment layer(s) cannot be stored in PSD by PairPaint and were left out. "
-                               "Save as .pairpaint to keep them.", nullptr, skipped);
+        notes << QObject::tr("%n adjustment layer(s) cannot be stored in PSD by PairPaint and were left out.",
+                             nullptr, skipped);
+    if (baked)
+        notes << QObject::tr("Layer styles on %n layer(s) were merged into the layer pixels.", nullptr, baked);
+    if (!notes.isEmpty())
+        *warning = notes.join(QLatin1Char(' ')) + QObject::tr(" Save as .pairpaint to keep everything editable.");
 
     // Encode channel data first so the records can state each channel's length.
     QList<QList<QPair<int, QByteArray>>> channelData;
-    for (const Layer *l : layers) {
-        const QList<QByteArray> planes = planesOf(l->image);
+    for (const Layer &l : layers) {
+        const QList<QByteArray> planes = planesOf(l.image);
         QList<QPair<int, QByteArray>> chans = {{-1, planes[3]}, {0, planes[0]}, {1, planes[1]}, {2, planes[2]}};
-        if (!l->mask.isNull())
-            chans.append({-2, maskPlane(l->mask)});
+        if (!l.mask.isNull())
+            chans.append({-2, maskPlane(l.mask)});
         for (auto &c : chans)
             c.second = encodePlane(c.second, w, h);
         channelData << chans;
@@ -527,26 +541,26 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
 
     li << qint16(layers.size());
     for (int i = 0; i < layers.size(); ++i) {
-        const Layer *l = layers[i];
+        const Layer &l = layers[i];
         li << qint32(0) << qint32(0) << qint32(h) << qint32(w);
         li << quint16(channelData[i].size());
         for (const auto &[id, data] : channelData[i])
             li << qint16(id) << quint32(2 + data.size());
         li.writeRawData("8BIM", 4);
-        li.writeRawData(keyForMode(l->mode).constData(), 4);
-        li << quint8(qRound(l->opacity * 255)) << quint8(0) << quint8(l->visible ? 0 : 2) << quint8(0);
+        li.writeRawData(keyForMode(l.mode).constData(), 4);
+        li << quint8(qRound(l.opacity * 255)) << quint8(0) << quint8(l.visible ? 0 : 2) << quint8(0);
 
         QByteArray extra;
         QDataStream ex(&extra, QIODevice::WriteOnly);
         ex.setByteOrder(QDataStream::BigEndian);
-        if (!l->mask.isNull()) {
+        if (!l.mask.isNull()) {
             ex << quint32(20) << qint32(0) << qint32(0) << qint32(h) << qint32(w)
-               << quint8(255) << quint8(l->maskEnabled ? 0 : 2) << quint16(0);
+               << quint8(255) << quint8(l.maskEnabled ? 0 : 2) << quint16(0);
         } else {
             ex << quint32(0);
         }
         ex << quint32(0);  // blending ranges
-        QByteArray name = l->name.toLocal8Bit().left(255);
+        QByteArray name = l.name.toLocal8Bit().left(255);
         ex << quint8(name.size());
         ex.writeRawData(name.constData(), int(name.size()));
         for (int pad = (4 - (1 + name.size()) % 4) % 4; pad > 0; --pad)
@@ -554,10 +568,10 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
         // Unicode name
         ex.writeRawData("8BIM", 4);
         ex.writeRawData("luni", 4);
-        quint32 len = 4 + 2 * quint32(l->name.size());
+        quint32 len = 4 + 2 * quint32(l.name.size());
         const quint32 padded = (len + 3) & ~3u;
-        ex << padded << quint32(l->name.size());
-        for (QChar c : l->name)
+        ex << padded << quint32(l.name.size());
+        for (QChar c : l.name)
             ex << quint16(c.unicode());
         for (quint32 k = len; k < padded; ++k)
             ex << quint8(0);

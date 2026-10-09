@@ -25,6 +25,30 @@ struct TextData {
     bool isValid() const { return !text.isEmpty(); }
 };
 
+// Non-destructive effects drawn behind a layer's pixels.
+struct LayerStyle {
+    bool shadow = false;
+    QColor shadowColor = Qt::black;
+    int shadowOpacity = 75;   // %
+    int shadowAngle = 120;    // degrees; direction the light comes from
+    int shadowDistance = 10;  // px
+    int shadowSize = 10;      // blur, px
+
+    bool glow = false;
+    QColor glowColor = QColor(255, 255, 190);
+    int glowOpacity = 75;
+    int glowSize = 15;
+
+    bool stroke = false;
+    QColor strokeColor = Qt::black;
+    int strokeOpacity = 100;
+    int strokeSize = 3;
+
+    bool any() const { return shadow || glow || stroke; }
+    int margin() const;  // how far the effects reach beyond the layer's pixels
+    bool operator==(const LayerStyle &o) const;
+};
+
 struct Layer {
     QString name;
     QImage image;  // always Format_ARGB32_Premultiplied, same size as the document
@@ -39,6 +63,7 @@ struct Layer {
 
     Adjustment adjustment;  // type != None makes this an adjustment layer
     TextData text;          // valid makes this an editable text layer
+    LayerStyle style;
 
     bool isAdjustment() const { return adjustment.type != Adjustment::None; }
     bool isText() const { return text.isValid(); }
@@ -128,6 +153,9 @@ public:
     void setLayerOpacity(int i, qreal opacity);
     void setLayerMode(int i, QPainter::CompositionMode mode);
     void renameLayer(int i, const QString &name);
+    void setLayerStyle(int i, const LayerStyle &style);
+    QImage renderLayer(int i) const;  // one layer alone, with its mask and effects, at full opacity
+    int effectsMargin() const;        // largest reach of any visible layer's effects
 
     // Layer masks (undoable)
     void addMask(bool fromSelection);

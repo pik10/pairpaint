@@ -169,6 +169,82 @@ static void testRetouchTools(MainWindow &w, ToolManager *tools, ToolSettings *se
     CHECK(opacityLabel);
 }
 
+
+// Drop shadow, outer glow and stroke, saved in projects and merged for PSD.
+static void testLayerStyles()
+{
+    Document d(QSize(200, 200), Qt::white);
+    d.addLayer();
+    QPainter p(&d.activeLayer().image);
+    p.fillRect(80, 80, 40, 40, Qt::black);
+    p.end();
+    const int layer = d.activeIndex();
+    auto gray = [&](int x, int y) { return d.flattened().pixelColor(x, y).red(); };
+
+    LayerStyle shadow;
+    shadow.shadow = true;
+    shadow.shadowAngle = 90;      // light from above: shadow falls straight down
+    shadow.shadowDistance = 10;
+    shadow.shadowSize = 4;
+    shadow.shadowOpacity = 100;
+    d.setLayerStyle(layer, shadow);
+    CHECK(gray(100, 125) < 100);  // shadow below the square
+    CHECK(gray(100, 74) == 255);  // nothing above it
+    CHECK(gray(100, 100) == 0);   // the square itself is unchanged
+    d.undoStack()->undo();
+    CHECK(gray(100, 125) == 255);
+
+    LayerStyle stroke;
+    stroke.stroke = true;
+    stroke.strokeColor = Qt::red;
+    stroke.strokeSize = 4;
+    d.setLayerStyle(layer, stroke);
+    const QColor edge = d.flattened().pixelColor(100, 77);
+    CHECK(edge.red() == 255 && edge.green() < 10);  // red ring just outside the square
+    CHECK(gray(100, 70) == 255);
+
+    LayerStyle glow;
+    glow.glow = true;
+    glow.glowColor = Qt::blue;
+    glow.glowSize = 12;
+    glow.glowOpacity = 100;
+    d.setLayerStyle(layer, glow);
+    const QColor g = d.flattened().pixelColor(100, 74);
+    CHECK(g.blue() > g.red() + 30);                 // bluish halo near the square
+    CHECK(d.flattened().pixelColor(100, 20) == QColor(Qt::white));
+
+    // All three at once survive a save/load round-trip exactly
+    LayerStyle all = shadow;
+    all.stroke = true;
+    all.strokeColor = Qt::red;
+    all.glow = true;
+    d.setLayerStyle(layer, all);
+    CHECK(d.effectsMargin() > 0);
+    QString err, warn;
+    const QString proj = tmpPath("styles.pairpaint");
+    CHECK(FileIO::saveProject(&d, proj, &err));
+    Document *loaded = FileIO::load(proj, &err);
+    CHECK(loaded && loaded->layer(layer).style == all);
+    CHECK(loaded && loaded->flattened() == d.flattened());
+    delete loaded;
+
+    // PSD: the effects are merged into the layer so the result looks the same
+    const QString psd = tmpPath("styles.psd");
+    CHECK(Psd::write(&d, psd, &err, &warn));
+    CHECK(warn.contains("merged"));
+    Document *fromPsd = FileIO::load(psd, &err);
+    CHECK(fromPsd != nullptr);
+    if (fromPsd) {
+        const QColor a = fromPsd->flattened().pixelColor(100, 125), b = d.flattened().pixelColor(100, 125);
+        CHECK(std::abs(a.red() - b.red()) <= 2 && std::abs(a.blue() - b.blue()) <= 2);
+        delete fromPsd;
+    }
+
+    // Clearing the style removes every effect
+    d.setLayerStyle(layer, LayerStyle());
+    CHECK(gray(100, 125) == 255 && gray(100, 77) == 255);
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -527,6 +603,7 @@ int main(int argc, char **argv) {
 
     testSelections();
     testRetouchTools(w, tools, settings);
+    testLayerStyles();
 
     std::printf("\n%d failure(s)\n", fails);
     d->undoStack()->setClean();

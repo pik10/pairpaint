@@ -27,6 +27,7 @@ signals:
     void newAdjustmentRequested(Adjustment::Type type);
     void editAdjustmentRequested(int layer);
     void editTextRequested(int layer);
+    void layerStyleRequested();
 
 private:
     void scheduleRebuild();

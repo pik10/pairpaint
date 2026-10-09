@@ -163,6 +163,7 @@ void MainWindow::createDocks()
     connect(m_layers, &LayersPanel::newAdjustmentRequested, this, &MainWindow::newAdjustmentLayer);
     connect(m_layers, &LayersPanel::editAdjustmentRequested, this, &MainWindow::editLayer);
     connect(m_layers, &LayersPanel::editTextRequested, this, &MainWindow::editLayer);
+    connect(m_layers, &LayersPanel::layerStyleRequested, this, &MainWindow::layerStyle);
     layersDock->setWidget(m_layers);
     addDockWidget(Qt::RightDockWidgetArea, layersDock);
 
@@ -294,6 +295,10 @@ void MainWindow::createMenus()
         addAction(adjLayer, Adjustments::name(type) + QStringLiteral("…"), {}, [this, type] { newAdjustmentLayer(type); });
     }
     addAction(layer, tr("Layer &Content Options…"), {}, [this] { if (doc()) editLayer(doc()->activeIndex()); });
+    addAction(layer, tr("Layer St&yle…"), {}, [this] { layerStyle(); });
+    addAction(layer, tr("Clear Layer Style"), {}, [this] {
+        withDoc([](Document *d) { d->setLayerStyle(d->activeIndex(), LayerStyle()); });
+    });
     addAction(layer, tr("Rasteri&ze Layer"), {}, [this] {
         withDoc([](Document *d) { d->rasterizeLayer(d->activeIndex()); });
     });
@@ -964,6 +969,18 @@ void MainWindow::canvasSize()
         SizeDialog dlg(tr("Canvas Size"), d->size(), true, this);
         if (dlg.exec() == QDialog::Accepted)
             d->resizeCanvas(dlg.newSize(), dlg.offset());
+    });
+}
+
+void MainWindow::layerStyle()
+{
+    withDoc([this](Document *d) {
+        if (d->activeLayer().isAdjustment()) {
+            statusBar()->showMessage(tr("Adjustment layers can't have layer styles."), 3000);
+            return;
+        }
+        LayerStyleDialog dlg(d, d->activeIndex(), this);
+        dlg.exec();
     });
 }
 

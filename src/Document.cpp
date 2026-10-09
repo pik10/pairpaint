@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QFontMetricsF>
 #include <QTransform>
+#include <QtMath>
 #include <QUndoCommand>
 #include <algorithm>
 
@@ -113,6 +114,51 @@ void blendAdjustment(QImage &out, const Layer &l, const QRect &r)
     }
 }
 
+QImage tinted(const QImage &alphaSource, const QColor &color)
+{
+    QImage t(alphaSource.size(), QImage::Format_ARGB32_Premultiplied);
+    t.fill(color);
+    QPainter p(&t);
+    p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    p.drawImage(0, 0, alphaSource);
+    return t;
+}
+
+// The layer's pixels for region `r` with its mask applied and its effects drawn behind.
+QImage renderWithEffects(const Layer &l, const QRect &r)
+{
+    const LayerStyle &s = l.style;
+    const int m = s.margin();
+    const QRect er = r.adjusted(-m, -m, m, m) & l.image.rect();
+    QImage content = l.image.copy(er);
+    if (!l.mask.isNull() && l.maskEnabled)
+        multiplyByMask(content, l.mask, er);
+    const QImage alpha = content.convertToFormat(QImage::Format_Alpha8);
+
+    QImage out(r.size(), QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::transparent);
+    QPainter p(&out);
+    p.translate(er.topLeft() - r.topLeft());
+    if (s.shadow) {
+        const qreal a = qDegreesToRadians(qreal(s.shadowAngle));
+        const QPointF offset(-std::cos(a) * s.shadowDistance, std::sin(a) * s.shadowDistance);
+        p.setOpacity(s.shadowOpacity / 100.0);
+        p.drawImage(offset, Filters::gaussianBlur(tinted(alpha, s.shadowColor), s.shadowSize / 2.0));
+    }
+    if (s.glow) {
+        const QImage spread = Filters::morphMask(alpha, s.glowSize * 0.3);
+        p.setOpacity(s.glowOpacity / 100.0);
+        p.drawImage(0, 0, Filters::gaussianBlur(tinted(spread, s.glowColor), s.glowSize / 2.0));
+    }
+    if (s.stroke) {
+        p.setOpacity(s.strokeOpacity / 100.0);
+        p.drawImage(0, 0, tinted(Filters::morphMask(alpha, s.strokeSize), s.strokeColor));
+    }
+    p.setOpacity(1.0);
+    p.drawImage(0, 0, content);
+    return out;
+}
+
 // Composites one layer onto `out`, which holds the document region `r`.
 void compositeLayer(QImage &out, const Layer &l, const QRect &r)
 {
@@ -125,7 +171,9 @@ void compositeLayer(QImage &out, const Layer &l, const QRect &r)
     QPainter p(&out);
     p.setOpacity(l.opacity);
     p.setCompositionMode(l.mode);
-    if (!l.mask.isNull() && l.maskEnabled) {
+    if (l.style.any()) {
+        p.drawImage(0, 0, renderWithEffects(l, r));
+    } else if (!l.mask.isNull() && l.maskEnabled) {
         QImage part = l.image.copy(r);
         multiplyByMask(part, l.mask, r);
         p.drawImage(0, 0, part);
@@ -164,6 +212,27 @@ QList<QPair<QString, QPainter::CompositionMode>> blendModes()
         {QObject::tr("Exclusion"), QPainter::CompositionMode_Exclusion},
         {QObject::tr("Linear Dodge (Add)"), QPainter::CompositionMode_Plus},
     };
+}
+
+int LayerStyle::margin() const
+{
+    int m = 0;
+    if (shadow)
+        m = std::max(m, shadowDistance + shadowSize * 2 + 2);
+    if (glow)
+        m = std::max(m, glowSize * 2 + 2);
+    if (stroke)
+        m = std::max(m, strokeSize + 2);
+    return m;
+}
+
+bool LayerStyle::operator==(const LayerStyle &o) const
+{
+    return shadow == o.shadow && shadowColor == o.shadowColor && shadowOpacity == o.shadowOpacity
+        && shadowAngle == o.shadowAngle && shadowDistance == o.shadowDistance && shadowSize == o.shadowSize
+        && glow == o.glow && glowColor == o.glowColor && glowOpacity == o.glowOpacity && glowSize == o.glowSize
+        && stroke == o.stroke && strokeColor == o.strokeColor && strokeOpacity == o.strokeOpacity
+        && strokeSize == o.strokeSize;
 }
 
 QImage renderText(const TextData &t, const QSize &size)
@@ -701,6 +770,35 @@ void Document::renameLayer(int i, const QString &name)
     const DocState before = m_state;
     layer(i).name = name;
     finish(tr("Rename Layer"), before, Structure);
+}
+
+void Document::setLayerStyle(int i, const LayerStyle &style)
+{
+    if (layer(i).style == style)
+        return;
+    const DocState before = m_state;
+    layer(i).style = style;
+    finish(style.any() ? tr("Layer Style") : tr("Clear Layer Style"), before, Pixels | Structure);
+}
+
+QImage Document::renderLayer(int i) const
+{
+    Layer l = layer(i);
+    l.visible = true;
+    l.opacity = 1.0;
+    l.mode = QPainter::CompositionMode_SourceOver;
+    QImage out = blankLayer(size());
+    compositeLayer(out, l, rect());
+    return out;
+}
+
+int Document::effectsMargin() const
+{
+    int m = 0;
+    for (const Layer &l : m_state.layers)
+        if (l.visible && !l.isAdjustment())
+            m = std::max(m, l.style.margin());
+    return m;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@
 namespace {
 
 constexpr quint32 kMagic = 0x50504E54;  // "PPNT"
-constexpr quint32 kVersion = 2;  // 2: masks, adjustment layers, text layers
+constexpr quint32 kVersion = 3;  // 2: masks, adjustment layers, text layers; 3: layer styles
 const QString kProjectSuffix = QStringLiteral("pairpaint");
 
 QString projectFilterEntry() { return QObject::tr("PairPaint Project (*.pairpaint)"); }
@@ -114,6 +114,21 @@ Document *loadProject(const QString &path, QString *error)
             if (hasText)
                 in >> l.text.text >> l.text.font >> l.text.color >> l.text.pos >> l.text.antialias;
         }
+        if (version >= 3) {
+            LayerStyle &st = l.style;
+            qint32 v[11] = {};
+            in >> st.shadow >> st.shadowColor >> st.glow >> st.glowColor >> st.stroke >> st.strokeColor;
+            for (qint32 &x : v)
+                in >> x;
+            st.shadowOpacity = v[0];
+            st.shadowAngle = v[1];
+            st.shadowDistance = v[2];
+            st.shadowSize = v[3];
+            st.glowOpacity = v[4];
+            st.glowSize = v[5];
+            st.strokeOpacity = v[6];
+            st.strokeSize = v[7];
+        }
         s.layers.append(l);
     }
     if (in.status() != QDataStream::Ok) {
@@ -202,6 +217,11 @@ bool saveProject(const Document *doc, const QString &path, QString *error)
             << QList<qint32>(l.adjustment.params.begin(), l.adjustment.params.end()) << l.text.isValid();
         if (l.text.isValid())
             out << l.text.text << l.text.font << l.text.color << l.text.pos << l.text.antialias;
+        const LayerStyle &st = l.style;
+        out << st.shadow << st.shadowColor << st.glow << st.glowColor << st.stroke << st.strokeColor;
+        for (int v : {st.shadowOpacity, st.shadowAngle, st.shadowDistance, st.shadowSize, st.glowOpacity,
+                      st.glowSize, st.strokeOpacity, st.strokeSize, 0, 0, 0})  // 3 spare slots
+            out << qint32(v);
     }
     if (out.status() != QDataStream::Ok || !f.commit()) {
         *error = f.errorString();

@@ -135,6 +135,14 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     buttons->addWidget(adjButton);
     m_docWidgets << adjButton;
 
+    auto *fx = new QToolButton;
+    fx->setText(QStringLiteral("fx"));
+    fx->setToolTip(tr("Layer style (drop shadow, glow, stroke)"));
+    fx->setAutoRaise(true);
+    connect(fx, &QToolButton::clicked, this, &LayersPanel::layerStyleRequested);
+    buttons->addWidget(fx);
+    m_docWidgets << fx;
+
     addButton(QStringLiteral("▲"), tr("Raise layer"), [](Document *d) { d->moveLayer(1); });
     addButton(QStringLiteral("▼"), tr("Lower layer"), [](Document *d) { d->moveLayer(-1); });
     addButton(QStringLiteral("⤓"), tr("Merge down"), [](Document *d) { d->mergeDown(); });
@@ -226,6 +234,17 @@ QIcon LayersPanel::thumbnailFor(int i) const
         p.setFont(f);
         p.setPen(Qt::white);
         p.drawText(QRect(left.right() - 13, left.bottom() - 13, 14, 14), Qt::AlignCenter, QStringLiteral("T"));
+    }
+    if (l.style.any()) {
+        const QRect badge(left.left(), left.bottom() - 12, 16, 13);
+        p.fillRect(badge, QColor(200, 120, 30));
+        QFont f = p.font();
+        f.setBold(true);
+        f.setItalic(true);
+        f.setPixelSize(10);
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(badge, Qt::AlignCenter, QStringLiteral("fx"));
     }
     if (!l.mask.isNull()) {
         drawThumb(p, right, l.mask);

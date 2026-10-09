@@ -12,6 +12,7 @@ class QButtonGroup;
 class QCheckBox;
 class QComboBox;
 class QFontComboBox;
+class QGroupBox;
 class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
@@ -69,4 +70,26 @@ private:
     QCheckBox *m_italic;
     QCheckBox *m_antialias;
     QPushButton *m_colorButton;
+};
+
+// Edits a layer's effects with a live preview; OK makes one undo step.
+class LayerStyleDialog : public QDialog {
+    Q_OBJECT
+public:
+    LayerStyleDialog(Document *doc, int layer, QWidget *parent = nullptr);
+    void done(int result) override;
+
+private:
+    LayerStyle current() const;
+    void preview();
+
+    Document *m_doc;
+    int m_layer;
+    DocState m_before;
+    LayerStyle m_original;
+    QColor m_shadowColor, m_glowColor, m_strokeColor;
+    QGroupBox *m_shadow, *m_glow, *m_stroke;
+    QSpinBox *m_shadowOpacity, *m_shadowAngle, *m_shadowDistance, *m_shadowSize;
+    QSpinBox *m_glowOpacity, *m_glowSize;
+    QSpinBox *m_strokeOpacity, *m_strokeSize;
 };
