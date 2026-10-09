@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <limits>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -1151,6 +1152,13 @@ static void testHeic()
     const bool expected = !qEnvironmentVariable("PAIRPAINT_EXPECT_HEIF").isEmpty();
     CHECK(Heif::isHeif(sample) && !Heif::isHeif(QStringLiteral(PAIRPAINT_TEST_DATA) + "/fuzz/seed-small.pairpaint"));
     QString err, warn;
+    if (!Heif::hasDecoder()) {  // through a Qt plugin: show what it returns, to diagnose color problems
+        QImageReader reader(sample);
+        const QImage raw = reader.read();
+        std::printf("HEIC via Qt: format '%s', %dx%d, color space '%s', pixel (36,16) %s\n", reader.format().constData(),
+                    raw.width(), raw.height(), qPrintable(raw.colorSpace().description()),
+                    raw.isNull() ? "-" : qPrintable(raw.pixelColor(std::min(36, raw.width() - 1), std::min(16, raw.height() - 1)).name()));
+    }
     Document *d = FileIO::load(sample, &err, &warn);
     std::printf("HEIC: %s%s\n", d ? "opened" : "not opened: ", qPrintable(err));
     if (!d) {
