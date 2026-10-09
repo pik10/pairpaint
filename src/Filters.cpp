@@ -380,6 +380,19 @@ QImage pixelate(const QImage &src, int cell)
     return img;
 }
 
+QImage dodgeBurn(const QImage &src, bool burn, int range)
+{
+    return mapPixels(src, [&](QRgb p) {
+        if (qAlpha(p) == 0)
+            return p;
+        const float l = luma(p) / 255.0f;
+        const float w = range == 0 ? (1 - l) * (1 - l) : range == 2 ? l * l : 1 - (2 * l - 1) * (2 * l - 1);
+        const float k = 0.6f * w;
+        auto ch = [&](int c) { return clamp255(int(std::lround(burn ? c - c * k : c + (255 - c) * k))); };
+        return qRgba(ch(qRed(p)), ch(qGreen(p)), ch(qBlue(p)), qAlpha(p));
+    });
+}
+
 QImage levels(const QImage &src, int inBlack, int inWhite, double gamma, int outBlack, int outWhite)
 {
     inWhite = std::max(inWhite, inBlack + 1);

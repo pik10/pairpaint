@@ -155,7 +155,7 @@ private:
 
 class BrushTool : public Tool {
 public:
-    enum Mode { Paint, Erase, Clone, Heal };
+    enum Mode { Paint, Erase, Clone, Heal, SmudgeMode, DodgeMode, BurnMode };
     BrushTool(ToolSettings *s, Mode mode) : Tool(s), m_mode(mode) {}
 
     Id id() const override
@@ -164,6 +164,9 @@ public:
         case Erase: return Eraser;
         case Clone: return CloneStamp;
         case Heal: return Healing;
+        case SmudgeMode: return Smudge;
+        case DodgeMode: return Dodge;
+        case BurnMode: return Burn;
         default: return Brush;
         }
     }
@@ -190,8 +193,13 @@ public:
         m_active = true;
         m_before = m_doc->state();
         m_base = m_doc->targetImage();
-        m_buffer = QImage(m_doc->size(), QImage::Format_ARGB32_Premultiplied);
-        m_buffer.fill(Qt::transparent);
+        if (m_mode == SmudgeMode) {
+            m_sample = QImage();  // picked up by the first dab
+            m_smudgeSize = int(std::ceil(m_settings->size)) + 2;
+        } else {
+            m_buffer = QImage(m_doc->size(), QImage::Format_ARGB32_Premultiplied);
+            m_buffer.fill(Qt::transparent);
+        }
         m_strokeRect = QRect();
         m_residual = 0;
         if (sampling) {
@@ -258,7 +266,7 @@ private:
         m_doc->commit(name(id()), m_before);
         m_doc->notifyStructureChanged();
         m_before = DocState();
-        m_base = m_buffer = m_source = QImage();
+        m_base = m_buffer = m_source = m_sample = QImage();
     }
 
     // Replaces the cloned pixels with ones that blend into their surroundings.
@@ -287,6 +295,27 @@ private:
     {
         const qreal baseRadius = std::max<qreal>(0.5, m_settings->size / 2.0);
         const qreal spacing = std::max<qreal>(1.0, m_settings->size * 0.12);
+        if (m_mode == SmudgeMode) {
+            QRect changed;
+            auto smudge = [&](const QPointF &c, qreal pressure) {
+                const qreal radius = m_settings->pressureSize ? std::max<qreal>(0.5, baseRadius * pressure) : baseRadius;
+                changed |= smudgeDab(c, radius, m_settings->pressureOpacity ? pressure : 1.0);
+            };
+            if (first)
+                smudge(a, pa);
+            const QLineF line(a, b);
+            const qreal len = line.length();
+            qreal t = spacing - m_residual;
+            while (t <= len) {
+                smudge(line.pointAt(t / len), pa + (pb - pa) * t / len);
+                t += spacing;
+            }
+            m_residual = len - (t - spacing);
+            changed &= m_doc->rect();
+            if (!changed.isEmpty())
+                m_doc->notifyImageChanged(changed);
+            return;
+        }
         QPainter p(&m_buffer);
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(Qt::NoPen);
@@ -344,7 +373,8 @@ private:
             return;
         }
 
-        QColor color = m_mode == Erase ? QColor(Qt::black) : m_settings->foreground();
+        // Only Paint uses a color; for the other modes the dabs just record coverage.
+        QColor color = m_mode == Paint ? m_settings->foreground() : QColor(Qt::black);
         color.setAlphaF(alpha);
         if (hard >= 0.999) {
             p.setBrush(color);
@@ -360,13 +390,91 @@ private:
         p.drawEllipse(c, radius, radius);
     }
 
+    // Smudge: blends the paint picked up so far into the canvas under the dab, then
+    // picks up some of the result. Returns the changed rectangle.
+    QRect smudgeDab(const QPointF &c, qreal radius, qreal alpha)
+    {
+        const int size = m_smudgeSize;
+        const QPoint topLeft(qRound(c.x() - size / 2.0), qRound(c.y() - size / 2.0));
+        const QRect area(topLeft, QSize(size, size));
+        QImage &target = m_doc->targetImage();
+        const QImage current = target.copy(area);
+        if (m_sample.isNull()) {
+            m_sample = current;
+            return QRect();
+        }
+        QImage coverage(size, size, QImage::Format_Alpha8);
+        coverage.fill(0);
+        {
+            QPainter q(&coverage);
+            q.setRenderHint(QPainter::Antialiasing);
+            q.setPen(Qt::NoPen);
+            const QPointF local = c - QPointF(topLeft);
+            const qreal hard = m_settings->hardness / 100.0;
+            if (hard >= 0.999) {
+                q.setBrush(Qt::black);
+            } else {
+                QRadialGradient g(local, radius);
+                g.setColorAt(0, Qt::black);
+                g.setColorAt(hard, Qt::black);
+                g.setColorAt(1, Qt::transparent);
+                q.setBrush(g);
+            }
+            q.drawEllipse(local, radius, radius);
+            if (m_doc->hasSelection()) {
+                q.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                q.drawImage(QPoint(0, 0), m_doc->selection(), area);
+            }
+        }
+        const qreal strength = m_settings->opacity / 100.0 * alpha;
+        QImage result = current;
+        for (int y = 0; y < size; ++y) {
+            QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
+            const QRgb *smp = reinterpret_cast<const QRgb *>(m_sample.constScanLine(y));
+            const uchar *cov = coverage.constScanLine(y);
+            for (int x = 0; x < size; ++x) {
+                const int k = int(cov[x] * strength);
+                if (k == 0)
+                    continue;
+                const QRgb a = out[x], b = smp[x];
+                auto mix = [k](int u, int v) { return u + (v - u) * k / 255; };
+                out[x] = qRgba(mix(qRed(a), qRed(b)), mix(qGreen(a), qGreen(b)), mix(qBlue(a), qBlue(b)), mix(qAlpha(a), qAlpha(b)));
+            }
+        }
+        QPainter tp(&target);
+        tp.setCompositionMode(QPainter::CompositionMode_Source);
+        tp.drawImage(topLeft, result);
+        tp.end();
+        // Carry the paint along: the sample drifts towards what is now under the brush.
+        const int keep = int(strength * 255);
+        for (int y = 0; y < size; ++y) {
+            QRgb *smp = reinterpret_cast<QRgb *>(m_sample.scanLine(y));
+            const QRgb *now = reinterpret_cast<const QRgb *>(result.constScanLine(y));
+            for (int x = 0; x < size; ++x) {
+                const QRgb a = now[x], b = smp[x];
+                auto mix = [keep](int u, int v) { return u + (v - u) * keep / 255; };
+                smp[x] = qRgba(mix(qRed(a), qRed(b)), mix(qGreen(a), qGreen(b)), mix(qBlue(a), qBlue(b)), mix(qAlpha(a), qAlpha(b)));
+            }
+        }
+        return area;
+    }
+
     void composite(QRect r)
     {
         r &= m_doc->rect();
         if (r.isEmpty())
             return;
         m_strokeRect |= r;
-        const QImage stroke = selectionMasked(m_buffer.copy(r), m_doc, r);
+        QImage stroke = selectionMasked(m_buffer.copy(r), m_doc, r);
+        if (m_mode == DodgeMode || m_mode == BurnMode) {
+            // The adjusted pixels, revealed where the stroke has coverage.
+            QImage adjusted = Filters::dodgeBurn(m_base.copy(r), m_mode == BurnMode, m_settings->toneRange);
+            QPainter q(&adjusted);
+            q.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            q.drawImage(0, 0, stroke);
+            q.end();
+            stroke = adjusted;
+        }
         QPainter p(&m_doc->targetImage());
         p.setCompositionMode(QPainter::CompositionMode_Source);
         p.drawImage(r.topLeft(), m_base, r);
@@ -384,6 +492,8 @@ private:
     QImage m_base;    // the target before the stroke
     QImage m_buffer;  // the stroke at full opacity; composited with the tool opacity
     QImage m_source;  // clone/heal source pixels
+    QImage m_sample;  // paint carried by the smudge tool
+    int m_smudgeSize = 0;
     QRect m_strokeRect;
     QPointF m_last, m_lastEnd, m_hover;
     qreal m_lastPressure = 1.0;
@@ -1217,6 +1327,9 @@ std::unique_ptr<Tool> createTool(Tool::Id id, ToolSettings *s)
     case Tool::Eraser: return std::make_unique<BrushTool>(s, BrushTool::Erase);
     case Tool::CloneStamp: return std::make_unique<BrushTool>(s, BrushTool::Clone);
     case Tool::Healing: return std::make_unique<BrushTool>(s, BrushTool::Heal);
+    case Tool::Smudge: return std::make_unique<BrushTool>(s, BrushTool::SmudgeMode);
+    case Tool::Dodge: return std::make_unique<BrushTool>(s, BrushTool::DodgeMode);
+    case Tool::Burn: return std::make_unique<BrushTool>(s, BrushTool::BurnMode);
     case Tool::Fill: return std::make_unique<FillTool>(s);
     case Tool::Gradient: return std::make_unique<GradientTool>(s);
     case Tool::LineShape:
@@ -1247,6 +1360,9 @@ QString Tool::name(Id id)
     case Eraser: return QObject::tr("Eraser");
     case CloneStamp: return QObject::tr("Clone Stamp");
     case Healing: return QObject::tr("Healing Brush");
+    case Smudge: return QObject::tr("Smudge");
+    case Dodge: return QObject::tr("Dodge");
+    case Burn: return QObject::tr("Burn");
     case Fill: return QObject::tr("Paint Bucket");
     case Gradient: return QObject::tr("Gradient");
     case LineShape: return QObject::tr("Line");
@@ -1263,7 +1379,7 @@ QString Tool::name(Id id)
 QString Tool::shortcut(Id id)
 {
     static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "W", "C", "I", "B", "E", "S", "J",
-                                      "K", "G", "N", "U", "Shift+U", "T", "H", "Z"};
+                                      "R", "O", "Shift+O", "K", "G", "N", "U", "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
 }
 
@@ -1282,6 +1398,9 @@ QString Tool::hint(Id id)
     case Eraser: return QObject::tr("Shift-click draws a straight line from the last stroke · [ ] change size");
     case CloneStamp: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint to copy it");
     case Healing: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint over blemishes");
+    case Smudge: return QObject::tr("Drag to smear colors, like a finger through wet paint");
+    case Dodge: return QObject::tr("Paint to lighten the chosen tonal range");
+    case Burn: return QObject::tr("Paint to darken the chosen tonal range");
     case Fill: return QObject::tr("Fills similar colored area with the foreground color");
     case Gradient: return QObject::tr("Drag to draw a foreground → background gradient. Shift snaps to 45°.");
     case LineShape:

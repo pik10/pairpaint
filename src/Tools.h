@@ -29,7 +29,7 @@ class Tool {
 public:
     enum Id {
         Move, Transform, RectSelect, EllipseSelect, Lasso, MagicWand, Crop, Eyedropper,
-        Brush, Eraser, CloneStamp, Healing, Fill, Gradient, LineShape, RectShape, EllipseShape,
+        Brush, Eraser, CloneStamp, Healing, Smudge, Dodge, Burn, Fill, Gradient, LineShape, RectShape, EllipseShape,
         Text, Hand, Zoom, Count
     };
 

@@ -20,6 +20,8 @@ QImage gaussianBlur(const QImage &src, double radius);
 QImage unsharpMask(const QImage &src, int amountPercent, double radius, int threshold);
 QImage addNoise(const QImage &src, int amountPercent);
 QImage pixelate(const QImage &src, int cellSize);
+// Lightens (dodge) or darkens (burn) the shadows, midtones or highlights (range 0..2).
+QImage dodgeBurn(const QImage &src, bool burn, int range);
 QImage levels(const QImage &src, int inBlack, int inWhite, double gamma, int outBlack, int outWhite);
 QImage curves(const QImage &src, const QList<int> &points);  // flattened x,y pairs in 0..255
 

@@ -17,6 +17,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QComboBox>
 #include <QCloseEvent>
 #include <QDir>
 #include <QDockWidget>
@@ -53,12 +54,16 @@ constexpr int kMaxRecent = 10;
 QList<int> optionsForTool(int id)
 {
     using T = Tool;
-    enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure };
+    // Same order as MainWindow::Option.
+    enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range };
     switch (id) {
     case T::Brush:
     case T::Eraser: return {Size, Hardness, Opacity, Pressure};
     case T::CloneStamp:
     case T::Healing: return {Size, Hardness, Opacity, SampleMerged, Pressure};
+    case T::Smudge: return {Size, Hardness, Opacity, Pressure};
+    case T::Dodge:
+    case T::Burn: return {Size, Hardness, Range, Opacity, Pressure};
     case T::Fill: return {Tolerance, Contiguous, SampleMerged, Opacity};
     case T::MagicWand: return {Tolerance, Contiguous, SampleMerged};
     case T::Gradient: return {Opacity, Radial};
@@ -503,12 +508,19 @@ void MainWindow::createOptionsBar()
     });
     spin(OptHardness, tr("Hardness:"), 0, 100, s->hardness, QStringLiteral("%"), [s](int v) { s->hardness = v; });
     spin(OptOpacity, tr("Opacity:"), 1, 100, s->opacity, QStringLiteral("%"), [s](int v) { s->opacity = v; });
+    m_opacityLabel = bar->widgetForAction(m_optionActions[OptOpacity])->findChild<QLabel *>();
     spin(OptTolerance, tr("Tolerance:"), 0, 255, s->tolerance, {}, [s](int v) { s->tolerance = v; });
     check(OptContiguous, tr("Contiguous"), s->contiguous, [s](bool v) { s->contiguous = v; });
     check(OptSampleMerged, tr("Sample all layers"), s->sampleMerged, [s](bool v) { s->sampleMerged = v; });
     check(OptFill, tr("Filled"), s->fillShape, [s](bool v) { s->fillShape = v; });
     check(OptAntialias, tr("Anti-alias"), s->antialias, [s](bool v) { s->antialias = v; });
     check(OptRadial, tr("Radial"), s->radial, [s](bool v) { s->radial = v; });
+
+    auto *range = new QComboBox;
+    range->addItems({tr("Shadows"), tr("Midtones"), tr("Highlights")});
+    range->setCurrentIndex(s->toneRange);
+    connect(range, &QComboBox::currentIndexChanged, this, [s](int v) { s->toneRange = v; });
+    m_optionActions[OptRange] = labelled(tr("Range:"), range);
 
     auto *pressureHolder = new QWidget;
     auto *pl = new QHBoxLayout(pressureHolder);
@@ -652,6 +664,10 @@ void MainWindow::onToolChanged(int id)
     for (int i = 0; i < OptCount; ++i)
         if (m_optionActions[i])
             m_optionActions[i]->setVisible(opts.contains(i));
+    // The opacity option means "exposure" for Dodge/Burn and "strength" for Smudge.
+    m_opacityLabel->setText(id == Tool::Dodge || id == Tool::Burn ? tr("Exposure:")
+                            : id == Tool::Smudge                 ? tr("Strength:")
+                                                                 : tr("Opacity:"));
     m_toolNameLabel->setText(Tool::name(Tool::Id(id)));
     m_hintLabel->setText(Tool::hint(Tool::Id(id)));
     if (canvas())

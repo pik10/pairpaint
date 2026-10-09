@@ -24,6 +24,7 @@ public:
     bool fillShape = false;
     bool antialias = true;
     bool radial = false;
+    int toneRange = 1;             // Dodge/Burn: 0 shadows, 1 midtones, 2 highlights
     bool pressureSize = true;      // pen pressure controls brush size
     bool pressureOpacity = false;  // pen pressure controls brush opacity
     QFont font{QStringLiteral("Sans Serif")};

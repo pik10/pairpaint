@@ -61,6 +61,34 @@ QIcon toolIcon(Tool::Id id)
         p.drawPoint(QPointF(-4, 4));
         p.drawPoint(QPointF(4, 4));
         break;
+    case Tool::Smudge: {
+        // A pointing finger.
+        p.setPen(QPen(ink, 9, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(20, 46, 44, 14);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawEllipse(QPointF(18, 48), 10, 10);
+        p.setPen(QPen(ink, 3, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(34, 52, 56, 52);
+        p.drawLine(40, 58, 56, 58);
+        break;
+    }
+    case Tool::Dodge:
+        // A lollipop-shaped paddle.
+        p.setPen(QPen(ink, 5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(22, 42, 8, 58);
+        p.setPen(QPen(ink, 4));
+        p.drawEllipse(QPointF(38, 26), 16, 16);
+        break;
+    case Tool::Burn:
+        // A hand pinching a ring.
+        p.setPen(QPen(ink, 4));
+        p.drawEllipse(QPointF(32, 30), 18, 18);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawEllipse(QPointF(32, 30), 7, 7);
+        p.drawRoundedRect(QRectF(22, 50, 20, 10), 4, 4);
+        break;
     case Tool::RectSelect:
         p.setPen(dashed);
         p.drawRect(10, 14, 44, 36);

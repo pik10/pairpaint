@@ -34,7 +34,7 @@ protected:
 
 private:
     enum Option { OptSize, OptHardness, OptOpacity, OptTolerance, OptContiguous, OptSampleMerged,
-                  OptFill, OptAntialias, OptRadial, OptFont, OptPressure, OptCount };
+                  OptFill, OptAntialias, OptRadial, OptFont, OptPressure, OptRange, OptCount };
 
     Canvas *canvas() const;
     Document *doc() const;
@@ -92,6 +92,7 @@ private:
     QAction *m_optionActions[OptCount] = {};
     QSpinBox *m_sizeSpin = nullptr;
     QLabel *m_toolNameLabel = nullptr;
+    QLabel *m_opacityLabel = nullptr;
     QLabel *m_hintLabel = nullptr;
     QLabel *m_posLabel = nullptr;
     QLabel *m_sizeLabel = nullptr;

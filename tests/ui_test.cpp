@@ -18,6 +18,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPainterPath>
 #include <QStandardPaths>
@@ -108,6 +109,64 @@ static void testSelections()
     lp.end();
     d.selectLayerTransparency();
     CHECK(d.selectionBounds() == QRect(20, 120, 40, 30));
+}
+
+
+// Dodge, Burn and Smudge, driven through the canvas like a user would.
+static void testRetouchTools(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    QImage img(200, 100, QImage::Format_ARGB32_Premultiplied);
+    img.fill(QColor(128, 128, 128));
+    QPainter p(&img);
+    p.fillRect(0, 50, 200, 50, QColor(30, 30, 30));   // dark lower half
+    p.end();
+    w.addDocument(new Document(img));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    settings->size = 20;
+    settings->hardness = 100;
+    settings->opacity = 100;
+
+    tools->setCurrent(Tool::Dodge);
+    bool exposureLabel = false;
+    for (QLabel *l : w.findChildren<QLabel *>())
+        exposureLabel |= l->text() == "Exposure:";
+    CHECK(exposureLabel);
+    settings->toneRange = 1;  // midtones
+    drag(c, {20, 25}, {80, 25});
+    CHECK(d->layer(0).image.pixelColor(50, 25).red() > 160);   // gray got lighter
+    CHECK(d->layer(0).image.pixelColor(150, 25).red() == 128); // untouched
+    d->undoStack()->undo();
+    CHECK(d->layer(0).image.pixelColor(50, 25).red() == 128);
+
+    settings->toneRange = 2;  // highlights barely affect dark pixels
+    drag(c, {20, 75}, {80, 75});
+    CHECK(d->layer(0).image.pixelColor(50, 75).red() <= 33);
+    d->undoStack()->undo();
+
+    tools->setCurrent(Tool::Burn);
+    settings->toneRange = 1;
+    drag(c, {120, 25}, {180, 25});
+    CHECK(d->layer(0).image.pixelColor(150, 25).red() < 100);  // gray got darker
+
+    // Smudge drags the dark lower half up into the gray
+    tools->setCurrent(Tool::Smudge);
+    settings->opacity = 80;
+    const int before = d->layer(0).image.pixelColor(100, 46).red();
+    drag(c, {100, 75}, {100, 40});
+    const int after = d->layer(0).image.pixelColor(100, 46).red();
+    std::printf("     smudge: %d -> %d\n", before, after);
+    CHECK(after < before - 20);
+    CHECK(d->layer(0).image.pixelColor(20, 46).red() == 128);  // away from the stroke: unchanged
+    d->undoStack()->undo();
+    CHECK(d->layer(0).image.pixelColor(100, 46).red() == before);
+
+    tools->setCurrent(Tool::Brush);
+    bool opacityLabel = false;
+    for (QLabel *l : w.findChildren<QLabel *>())
+        opacityLabel |= l->text() == "Opacity:";
+    CHECK(opacityLabel);
 }
 
 int main(int argc, char **argv) {
@@ -467,6 +526,7 @@ int main(int argc, char **argv) {
     }
 
     testSelections();
+    testRetouchTools(w, tools, settings);
 
     std::printf("\n%d failure(s)\n", fails);
     d->undoStack()->setClean();
