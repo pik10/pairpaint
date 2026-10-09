@@ -1391,10 +1391,26 @@ static void testSaveAndExport(MainWindow &w)
     CHECK(w.suggestedSavePath(&project) == tmpPath("poster.pairpaint") && w.suggestedExportPath(&project) == tmpPath("poster.png"));
     Document heic(QSize(10, 10), Qt::white);
     heic.setFilePath(tmpPath("IMG_0001.HEIC"));
-    CHECK(w.suggestedSavePath(&heic) == tmpPath("IMG_0001.pairpaint") && w.suggestedExportPath(&heic) == tmpPath("IMG_0001.png"));
+    // (macOS can write HEIC, so there Export offers the HEIC itself.)
+    CHECK(w.suggestedSavePath(&heic) == tmpPath("IMG_0001.pairpaint")
+          && w.suggestedExportPath(&heic) == tmpPath(FileIO::isFlatImageFile("x.heic") ? "IMG_0001.HEIC" : "IMG_0001.png"));
     Document untitled(QSize(10, 10), Qt::white);
     CHECK(w.suggestedSavePath(&untitled).endsWith(untitled.displayName() + ".pairpaint")
           && w.suggestedExportPath(&untitled).endsWith(untitled.displayName() + ".png"));
+
+    // Ctrl+S on a cropped PNG saves it in place, as PNG: no dialog, nothing left unsaved.
+    QImage original(80, 60, QImage::Format_ARGB32_Premultiplied);
+    original.fill(Qt::darkCyan);
+    CHECK(original.save(tmpPath("quick.png")));
+    w.openFile(tmpPath("quick.png"));
+    Document *quick = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget())->document();
+    CHECK(quick->filePath() == tmpPath("quick.png"));
+    quick->crop(QRect(10, 10, 40, 30));
+    QAction *saveAction = action(&w, "Save");
+    CHECK(saveAction);
+    if (saveAction)
+        saveAction->trigger();
+    CHECK(!quick->isModified() && QImage(tmpPath("quick.png")).size() == QSize(40, 30));
 }
 
 // HEIC photos (iPhone): opened upright, with Display P3 colors converted to sRGB.

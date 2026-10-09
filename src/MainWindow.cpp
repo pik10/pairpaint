@@ -951,8 +951,22 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
     m_tools->current()->cancel();
     Document *d = c->document();
     QString path = d->filePath();
-    // Save keeps everything, so it writes only the layered formats; images opened from a JPEG
-    // or PNG are saved as a project (or PSD), and flat copies are made with Export.
+    // A quick edit of a JPEG or PNG (crop, resize, adjust: still one plain layer) saves straight
+    // back to it, since the file can hold everything.
+    if (!saveAs && FileIO::isFlatImageFile(path) && !hasLayeredContent(d)) {
+        QString error;
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        const bool ok = exportTo(d, path, QSettings().value("exportQuality", 92).toInt(), &error);
+        QApplication::restoreOverrideCursor();
+        if (!ok) {
+            QMessageBox::critical(this, tr("Save"), tr("Could not save %1:\n%2").arg(QFileInfo(path).fileName(), error));
+            return false;
+        }
+        statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(path).fileName()), 3000);
+        return true;
+    }
+    // Otherwise Save keeps everything, so it writes only the layered formats: an image with
+    // layers is saved as a project (or PSD), and flat copies are made with Export.
     if (saveAs || !FileIO::isLayeredFormat(path)) {
         QString selectedFilter;
         path = QFileDialog::getSaveFileName(this, tr("Save As"), suggestedSavePath(d), FileIO::saveFilter(),
