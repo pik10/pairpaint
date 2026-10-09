@@ -52,13 +52,15 @@ jobs:
 
       - name: Test
         env:
-          ASAN_OPTIONS: detect_leaks=0
+          ASAN_OPTIONS: detect_leaks=0:allocator_may_return_null=1:max_allocation_size_mb=4096
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build --output-on-failure
 
       - name: Fuzz the file readers
         env:
-          ASAN_OPTIONS: detect_leaks=0
+          # Impossible allocations fail like on a real system (and must be handled), instead of
+          # ASan aborting the run.
+          ASAN_OPTIONS: detect_leaks=0:allocator_may_return_null=1:max_allocation_size_mb=4096
           UBSAN_OPTIONS: print_stacktrace=1
         run: |
           # A different random seed each run widens coverage; the seed is in the log to reproduce.

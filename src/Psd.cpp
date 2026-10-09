@@ -16,6 +16,7 @@
 #include <QtEndian>
 #include <cmath>
 #include <limits>
+#include <new>
 
 namespace {
 
@@ -994,6 +995,9 @@ Document *read(const QString &path, QString *error, QString *warning)
     } catch (const QString &message) {
         *error = message;
         return nullptr;
+    } catch (const std::bad_alloc &) {
+        *error = QObject::tr("The file is damaged or too large to open (out of memory).");
+        return nullptr;
     }
 }
 
@@ -1011,6 +1015,9 @@ QImage readComposite(const QString &path, QString *error)
         return merged;
     } catch (const QString &message) {
         *error = message;
+        return {};
+    } catch (const std::bad_alloc &) {
+        *error = QObject::tr("Out of memory.");
         return {};
     }
 }

@@ -755,6 +755,9 @@ static void testDamagedFiles()
     qint64 ms = 0;
     CHECK(!loads(readAll(data + "/fuzz/hang-huge-layer-name.psd"), "psd", &ms));
     CHECK(ms < 2000);
+    // Found by the CI fuzzer with Qt 6.10: a corrupted font made Qt ask for 48 GB.
+    CHECK(!loads(readAll(data + "/fuzz/oom-font-qt610.pairpaint"), "pairpaint"));
+    CHECK(!loads(readAll(data + "/fuzz/ci-seed18-last.psd"), "psd"));
 
     // Write a small valid PSD to corrupt in specific ways.
     Document small(QSize(16, 8), Qt::red);

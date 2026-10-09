@@ -14,6 +14,7 @@
 #include <QImageWriter>
 #include <QObject>
 #include <QSaveFile>
+#include <new>
 
 namespace {
 
@@ -101,7 +102,21 @@ Document *loadProject(const QString &path, QString *error)
             qint32 adjType = 0;
             QList<qint32> params;
             bool hasText = false;
-            in >> maskPng >> l.maskEnabled >> adjType >> params >> hasText;
+            in >> maskPng >> l.maskEnabled >> adjType;
+            // Read the settings list ourselves: Qt's list reader reserves memory for whatever
+            // count the file claims before reading anything.
+            quint32 count = 0;
+            in >> count;
+            if (count > 1000 || in.status() != QDataStream::Ok) {
+                *error = QObject::tr("The file is damaged.");
+                return nullptr;
+            }
+            for (quint32 k = 0; k < count; ++k) {
+                qint32 v = 0;
+                in >> v;
+                params << v;
+            }
+            in >> hasText;
             if (!maskPng.isEmpty())
                 l.mask = decodeImage(maskPng, s.size);
             if (adjType > Adjustment::None && adjType < Adjustment::TypeCount) {
@@ -160,6 +175,8 @@ namespace {
 qint64 g_maxImagePixels = 250'000'000;  // about 1 GB per layer
 }
 
+Document *loadUnchecked(const QString &path, QString *error, QString *warning);
+
 qint64 maxImagePixels() { return g_maxImagePixels; }
 void setMaxImagePixels(qint64 pixels) { g_maxImagePixels = pixels; }
 
@@ -203,6 +220,18 @@ bool save(const Document *doc, const QString &path, QString *error, QString *war
 }
 
 Document *load(const QString &path, QString *error, QString *warning)
+{
+    // A damaged file can make a reader (ours or Qt's) ask for an impossible amount of memory.
+    // That must be a "damaged file" error, not a crash.
+    try {
+        return loadUnchecked(path, error, warning);
+    } catch (const std::bad_alloc &) {
+        *error = QObject::tr("The file is damaged or too large to open (out of memory).");
+        return nullptr;
+    }
+}
+
+Document *loadUnchecked(const QString &path, QString *error, QString *warning)
 {
     if (isProjectFile(path))
         return loadProject(path, error);
