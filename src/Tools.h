@@ -6,6 +6,8 @@
 #include <QCursor>
 #include <QObject>
 #include <QPointF>
+#include <QRectF>
+#include <QString>
 #include <QTransform>
 #include <array>
 #include <memory>
@@ -47,6 +49,14 @@ public:
     virtual QCursor cursor() const { return Qt::CrossCursor; }
     virtual bool showsBrushOutline() const { return false; }
     virtual void cancel() {}  // finish or abort any interaction in progress
+
+    // Keyboard text entry (the Text tool while typing): while true, the canvas sends keys
+    // here instead of triggering single-key shortcuts.
+    virtual bool capturesKeyboard() const { return false; }
+    virtual bool wantsKey(QKeyEvent *) const { return false; }
+    virtual void inputText(const QString &) {}       // committed text from an input method
+    virtual QRectF caretRect() const { return {}; }   // image coordinates, for input method popups
+    virtual void settingsChanged() {}                  // font, color, etc. changed in the options bar
 
     void setContext(Document *doc, Canvas *canvas) { m_doc = doc; m_canvas = canvas; }
 

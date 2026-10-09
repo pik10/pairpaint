@@ -167,6 +167,11 @@ public:
     void addAdjustmentLayer(const Adjustment &adjustment, bool undoable = true);
     void addTextLayer(const TextData &text);
     void setText(int i, const TextData &text);
+    // Editing text on the canvas: begin (adds a text layer, returns its index), update while
+    // typing (not undoable), then finish, which makes the whole edit one undo step.
+    int beginTextLayer(const TextData &text);
+    void setTextLive(int i, const TextData &text);
+    void finishTextEdit(int i, const DocState &before, bool isNew);
     void rasterizeLayer(int i);
     void duplicateLayer();
     void deleteLayer();

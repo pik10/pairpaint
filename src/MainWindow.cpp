@@ -34,6 +34,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
@@ -104,6 +105,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     createStatusBar();
 
     connect(m_tools, &ToolManager::toolChanged, this, &MainWindow::onToolChanged);
+    // Text being typed takes the foreground color; editing existing text shows its style.
+    connect(m_settings, &ToolSettings::colorsChanged, this, [this] { m_tools->current()->settingsChanged(); });
+    connect(m_settings, &ToolSettings::textStyleChanged, this, [this] {
+        const QSignalBlocker b1(m_fontBox), b2(m_fontSize), b3(m_bold), b4(m_italic), b5(m_antialiasBox);
+        const QFont &f = m_settings->font;
+        m_fontBox->setCurrentFont(f);
+        m_fontSize->setValue(f.pixelSize() > 0 ? f.pixelSize() : 48);
+        m_bold->setChecked(f.bold());
+        m_italic->setChecked(f.italic());
+        m_antialiasBox->setChecked(m_settings->antialias);
+    });
     onToolChanged(m_tools->currentId());
 
     QSettings s;
@@ -532,7 +544,11 @@ void MainWindow::createOptionsBar()
     check(OptContiguous, tr("Contiguous"), s->contiguous, [s](bool v) { s->contiguous = v; });
     check(OptSampleMerged, tr("Sample all layers"), s->sampleMerged, [s](bool v) { s->sampleMerged = v; });
     check(OptFill, tr("Filled"), s->fillShape, [s](bool v) { s->fillShape = v; });
-    check(OptAntialias, tr("Anti-alias"), s->antialias, [s](bool v) { s->antialias = v; });
+    check(OptAntialias, tr("Anti-alias"), s->antialias, [this, s](bool v) {
+        s->antialias = v;
+        m_tools->current()->settingsChanged();
+    });
+    m_antialiasBox = qobject_cast<QCheckBox *>(bar->widgetForAction(m_optionActions[OptAntialias])->findChild<QCheckBox *>());
     check(OptRadial, tr("Radial"), s->radial, [s](bool v) { s->radial = v; });
 
     auto *range = new QComboBox;
@@ -558,20 +574,21 @@ void MainWindow::createOptionsBar()
     auto *fontHolder = new QWidget;
     auto *fl = new QHBoxLayout(fontHolder);
     fl->setContentsMargins(6, 0, 6, 0);
-    auto *fontBox = new QFontComboBox;
+    auto *fontBox = m_fontBox = new QFontComboBox;
     fontBox->setCurrentFont(s->font);
-    auto *fontSize = new QSpinBox;
+    auto *fontSize = m_fontSize = new QSpinBox;
     fontSize->setRange(4, 1000);
     fontSize->setValue(s->font.pixelSize());
     fontSize->setSuffix(tr(" px"));
-    auto *boldBox = new QCheckBox(tr("Bold"));
-    auto *italicBox = new QCheckBox(tr("Italic"));
+    auto *boldBox = m_bold = new QCheckBox(tr("Bold"));
+    auto *italicBox = m_italic = new QCheckBox(tr("Italic"));
     auto updateFont = [=] {
         QFont f = fontBox->currentFont();
         f.setPixelSize(fontSize->value());
         f.setBold(boldBox->isChecked());
         f.setItalic(italicBox->isChecked());
         s->font = f;
+        m_tools->current()->settingsChanged();  // restyles text being typed
     };
     connect(fontBox, &QFontComboBox::currentFontChanged, this, updateFont);
     connect(fontSize, &QSpinBox::valueChanged, this, updateFont);

@@ -7,6 +7,9 @@
 #include "ToolSettings.h"
 #include "Tools.h"
 
+#include <QGuiApplication>
+#include <QInputMethod>
+#include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -91,6 +94,7 @@ Tool *Canvas::tool() const
 void Canvas::activateTool()
 {
     tool()->activated();
+    syncInputMethod();
     updateCursor();
     update();
 }
@@ -331,6 +335,7 @@ void Canvas::mousePressEvent(QMouseEvent *e)
     }
     m_toolPressed = true;
     tool()->press(toolEvent(e));
+    syncInputMethod();
     update();
 }
 
@@ -384,6 +389,11 @@ void Canvas::wheelEvent(QWheelEvent *e)
 
 void Canvas::keyPressEvent(QKeyEvent *e)
 {
+    if (tool()->capturesKeyboard() && tool()->keyPress(e)) {  // typing text: every key goes to the tool
+        syncInputMethod();
+        update();
+        return;
+    }
     if (e->key() == Qt::Key_Space) {
         if (!e->isAutoRepeat()) {
             m_spaceDown = true;
@@ -408,6 +418,51 @@ void Canvas::keyReleaseEvent(QKeyEvent *e)
         return;
     }
     QWidget::keyReleaseEvent(e);
+}
+
+bool Canvas::event(QEvent *e)
+{
+    // While the Text tool is typing, letters must reach it instead of triggering
+    // single-key shortcuts (B for Brush, ...).
+    if (e->type() == QEvent::ShortcutOverride && tool()->capturesKeyboard()
+        && tool()->wantsKey(static_cast<QKeyEvent *>(e))) {
+        e->accept();
+        return true;
+    }
+    return QWidget::event(e);
+}
+
+void Canvas::syncInputMethod()
+{
+    const bool on = tool()->capturesKeyboard();
+    if (testAttribute(Qt::WA_InputMethodEnabled) != on) {
+        setAttribute(Qt::WA_InputMethodEnabled, on);
+        QGuiApplication::inputMethod()->update(Qt::ImEnabled);
+    }
+    if (on)
+        QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
+}
+
+void Canvas::inputMethodEvent(QInputMethodEvent *e)
+{
+    // Accented and other composed characters arrive here from the input method.
+    if (tool()->capturesKeyboard()) {
+        tool()->inputText(e->commitString());
+        update();
+    }
+    e->accept();
+}
+
+QVariant Canvas::inputMethodQuery(Qt::InputMethodQuery query) const
+{
+    switch (query) {
+    case Qt::ImEnabled:
+        return tool()->capturesKeyboard();
+    case Qt::ImCursorRectangle:
+        return imageToWidget().mapRect(tool()->caretRect());
+    default:
+        return QWidget::inputMethodQuery(query);
+    }
 }
 
 void Canvas::tabletEvent(QTabletEvent *e)

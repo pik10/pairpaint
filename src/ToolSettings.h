@@ -40,10 +40,18 @@ public:
         if (c != m_bg) { m_bg = c; emit colorsChanged(); }
     }
     void swapColors() { std::swap(m_fg, m_bg); emit colorsChanged(); }
+    // Called by the Text tool when editing existing text, so the options bar shows its style.
+    void setTextStyle(const QFont &f, bool aa)
+    {
+        font = f;
+        antialias = aa;
+        emit textStyleChanged();
+    }
     void resetColors() { m_fg = Qt::black; m_bg = Qt::white; emit colorsChanged(); }
 
 signals:
     void colorsChanged();
+    void textStyleChanged();
 
 private:
     QColor m_fg = Qt::black;

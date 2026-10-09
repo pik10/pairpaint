@@ -5,11 +5,15 @@
 
 #include "Canvas.h"
 #include "Dialogs.h"
+#include "TextBox.h"
 #include "Document.h"
 #include "Filters.h"
 #include "ToolSettings.h"
 
+#include <QClipboard>
 #include <QCursor>
+#include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLineF>
 #include <QPainter>
@@ -1290,31 +1294,319 @@ private:
 
 // ---------------------------------------------------------------------------
 
+// Types text directly on the canvas. Clicking empty space starts a new text layer;
+// clicking existing text edits it. Esc, clicking elsewhere or switching tools finishes,
+// and the whole edit is one undo step.
 class TextTool : public Tool {
 public:
     using Tool::Tool;
     Id id() const override { return Text; }
     QCursor cursor() const override { return Qt::IBeamCursor; }
+    bool capturesKeyboard() const override { return m_editing; }
 
     void press(const ToolEvent &e) override
     {
         if (e.button != Qt::LeftButton)
             return;
-        // Clicking on the active text layer edits it; anywhere else creates a new one.
-        const Layer &l = m_doc->activeLayer();
-        if (l.isText() && textBounds(l.text).contains(e.pos)) {
-            TextDialog::editLayer(m_doc, m_doc->activeIndex(), m_canvas);
-            return;
+        if (m_editing && valid()) {
+            const QRectF area = TextBox(m_text).bounds().adjusted(-6, -6, 6, 6);
+            if (area.contains(e.pos)) {
+                m_cursor = TextBox(m_text).hitTest(e.pos);
+                if (!(e.modifiers & Qt::ShiftModifier))
+                    m_anchor = m_cursor;
+                m_selecting = true;
+                m_canvas->update();
+                return;
+            }
         }
-        TextData t;
-        t.font = m_settings->font;
-        t.color = m_settings->foreground();
-        t.antialias = m_settings->antialias;
-        t.pos = e.pos;
-        TextDialog dlg(t, m_canvas);
-        if (dlg.exec() == QDialog::Accepted && dlg.data().isValid())
-            m_doc->addTextLayer(dlg.data());
+        finish();
+        // Edit the topmost visible text layer under the click, or start a new one.
+        for (int i = m_doc->layerCount() - 1; i >= 0; --i) {
+            const Layer &l = m_doc->layer(i);
+            if (l.visible && l.isText() && textBounds(l.text).adjusted(-4, -4, 4, 4).contains(e.pos)) {
+                m_doc->setActiveIndex(i);
+                m_before = m_doc->state();
+                m_layer = i;
+                m_text = l.text;
+                m_isNew = false;
+                m_editing = true;
+                m_cursor = m_anchor = TextBox(m_text).hitTest(e.pos);
+                m_selecting = true;
+                m_settings->setTextStyle(m_text.font, m_text.antialias);
+                m_canvas->update();
+                return;
+            }
+        }
+        m_before = m_doc->state();
+        m_text = TextData();
+        m_text.font = m_settings->font;
+        m_text.color = m_settings->foreground();
+        m_text.antialias = m_settings->antialias;
+        // The click marks where the first line sits (its baseline), as in Photoshop.
+        m_text.pos = e.pos - QPointF(0, QFontMetricsF(m_text.font).ascent());
+        m_layer = m_doc->beginTextLayer(m_text);
+        m_isNew = true;
+        m_editing = true;
+        m_cursor = m_anchor = 0;
+        m_canvas->update();
     }
+
+    void move(const ToolEvent &e) override
+    {
+        if (m_editing && m_selecting && (e.buttons & Qt::LeftButton)) {
+            m_cursor = TextBox(m_text).hitTest(e.pos);
+            m_canvas->update();
+        }
+    }
+
+    void release(const ToolEvent &) override { m_selecting = false; }
+
+    void doubleClick(const ToolEvent &e) override
+    {
+        if (!m_editing)
+            return;
+        // Select the word under the pointer.
+        const QString &t = m_text.text;
+        int a = TextBox(m_text).hitTest(e.pos), b = a;
+        auto isWord = [&](int i) { return i >= 0 && i < t.size() && t[i].isLetterOrNumber(); };
+        while (isWord(a - 1))
+            --a;
+        while (isWord(b))
+            ++b;
+        m_anchor = a;
+        m_cursor = b;
+        m_canvas->update();
+    }
+
+    void cancel() override { finish(); }
+
+    bool wantsKey(QKeyEvent *e) const override
+    {
+        if (!m_editing)
+            return false;
+        const Qt::KeyboardModifiers mods = e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
+        if (mods == Qt::ControlModifier) {
+            switch (e->key()) {
+            case Qt::Key_A: case Qt::Key_C: case Qt::Key_X: case Qt::Key_V: case Qt::Key_Left: case Qt::Key_Right:
+            case Qt::Key_Home: case Qt::Key_End: case Qt::Key_Backspace: case Qt::Key_Delete: case Qt::Key_Return:
+            case Qt::Key_Enter:
+                return true;
+            default:
+                return false;  // other shortcuts (Ctrl+S, Ctrl+Z...) still work and finish the edit first
+            }
+        }
+        // Plain keys, and AltGr combinations that type a character.
+        return mods == Qt::NoModifier || !e->text().isEmpty();
+    }
+
+    bool keyPress(QKeyEvent *e) override
+    {
+        if (!m_editing || !valid())
+            return false;
+        const bool shift = e->modifiers() & Qt::ShiftModifier;
+        const bool ctrl = e->modifiers() & Qt::ControlModifier;
+        const TextBox box(m_text);
+        const int length = int(m_text.text.size());
+        auto moveTo = [&](int pos) {
+            m_cursor = std::clamp(pos, 0, length);
+            if (!shift)
+                m_anchor = m_cursor;
+            m_canvas->update();
+            return true;
+        };
+        switch (e->key()) {
+        case Qt::Key_Escape:
+            finish();
+            return true;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (ctrl) {
+                finish();
+                return true;
+            }
+            insert(QStringLiteral("\n"));
+            return true;
+        case Qt::Key_Backspace:
+            if (hasSelection())
+                insert(QString());
+            else if (m_cursor > 0) {
+                m_anchor = ctrl ? wordBoundary(m_cursor, -1) : m_cursor - 1;
+                insert(QString());
+            }
+            return true;
+        case Qt::Key_Delete:
+            if (hasSelection())
+                insert(QString());
+            else if (m_cursor < length) {
+                m_anchor = ctrl ? wordBoundary(m_cursor, 1) : m_cursor + 1;
+                insert(QString());
+            }
+            return true;
+        case Qt::Key_Left:
+            if (!shift && hasSelection())
+                return moveTo(std::min(m_cursor, m_anchor));
+            return moveTo(ctrl ? wordBoundary(m_cursor, -1) : m_cursor - 1);
+        case Qt::Key_Right:
+            if (!shift && hasSelection())
+                return moveTo(std::max(m_cursor, m_anchor));
+            return moveTo(ctrl ? wordBoundary(m_cursor, 1) : m_cursor + 1);
+        case Qt::Key_Up: return moveTo(box.moveVertically(m_cursor, -1));
+        case Qt::Key_Down: return moveTo(box.moveVertically(m_cursor, 1));
+        case Qt::Key_Home: return moveTo(ctrl ? 0 : box.lineStart(m_cursor));
+        case Qt::Key_End: return moveTo(ctrl ? length : box.lineEnd(m_cursor));
+        default:
+            break;
+        }
+        if (ctrl && !(e->modifiers() & Qt::AltModifier)) {
+            switch (e->key()) {
+            case Qt::Key_A:
+                m_anchor = 0;
+                m_cursor = length;
+                m_canvas->update();
+                return true;
+            case Qt::Key_C:
+            case Qt::Key_X:
+                if (hasSelection()) {
+                    QGuiApplication::clipboard()->setText(selectedText());
+                    if (e->key() == Qt::Key_X)
+                        insert(QString());
+                }
+                return true;
+            case Qt::Key_V:
+                insert(QGuiApplication::clipboard()->text().remove(QLatin1Char('\r')));
+                return true;
+            default:
+                return false;
+            }
+        }
+        QString typed = e->text();
+        typed.removeIf([](QChar c) { return c.category() == QChar::Other_Control; });
+        if (typed.isEmpty())
+            return false;
+        insert(typed);
+        return true;
+    }
+
+    void inputText(const QString &text) override
+    {
+        if (m_editing && valid() && !text.isEmpty())
+            insert(text);
+    }
+
+    QRectF caretRect() const override
+    {
+        if (!m_editing)
+            return {};
+        const QLineF l = TextBox(m_text).cursorLine(m_cursor);
+        return QRectF(l.p1(), l.p2()).normalized().adjusted(-1, 0, 1, 0);
+    }
+
+    void settingsChanged() override
+    {
+        // The options bar's font, color and anti-aliasing apply to the text being edited.
+        if (!m_editing || !valid())
+            return;
+        m_text.font = m_settings->font;
+        m_text.color = m_settings->foreground();
+        m_text.antialias = m_settings->antialias;
+        m_doc->setTextLive(m_layer, m_text);
+        m_canvas->update();
+    }
+
+    void paintOverlay(QPainter &p, const QTransform &t) override
+    {
+        if (!m_editing || !valid())
+            return;
+        const TextBox box(m_text);
+        // Frame around the text being edited
+        QPen frame(QColor(255, 255, 255, 160), 1, Qt::DashLine);
+        frame.setCosmetic(true);
+        p.setPen(frame);
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(t.mapRect(box.bounds().adjusted(-3, -3, 3, 3)));
+        // Selection
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(42, 130, 218, 110));
+        for (const QRectF &r : box.selectionRects(m_anchor, m_cursor))
+            p.drawRect(t.mapRect(r));
+        // Cursor: dark outline with a light core, visible on any background
+        const QLineF caret = t.map(box.cursorLine(m_cursor));
+        p.setPen(QPen(QColor(0, 0, 0, 200), 3));
+        p.drawLine(caret);
+        p.setPen(QPen(Qt::white, 1));
+        p.drawLine(caret);
+    }
+
+private:
+    bool hasSelection() const { return m_anchor != m_cursor; }
+
+    QString selectedText() const
+    {
+        const int a = std::min(m_anchor, m_cursor), b = std::max(m_anchor, m_cursor);
+        return m_text.text.mid(a, b - a);
+    }
+
+    int wordBoundary(int from, int dir) const
+    {
+        const QString &t = m_text.text;
+        int i = from;
+        auto at = [&](int k) { return t[k].isLetterOrNumber(); };
+        if (dir < 0) {
+            while (i > 0 && !at(i - 1)) --i;
+            while (i > 0 && at(i - 1)) --i;
+        } else {
+            while (i < t.size() && !at(i)) ++i;
+            while (i < t.size() && at(i)) ++i;
+        }
+        return i;
+    }
+
+    // Replaces the selection (or inserts at the cursor) and re-renders the layer.
+    void insert(const QString &s)
+    {
+        const int a = std::min(m_anchor, m_cursor), b = std::max(m_anchor, m_cursor);
+        m_text.text.replace(a, b - a, s);
+        m_cursor = m_anchor = a + int(s.size());
+        m_doc->setTextLive(m_layer, m_text);
+        m_canvas->update();
+    }
+
+    // The layer may have been removed or moved by something else (e.g. the Layers panel).
+    bool valid() const
+    {
+        if (m_layer >= 0 && m_layer < m_doc->layerCount() && m_doc->layer(m_layer).text.pos == m_text.pos
+            && m_doc->layer(m_layer).kind == LayerKind::Normal)
+            return true;
+        const_cast<TextTool *>(this)->m_editing = false;
+        return false;
+    }
+
+    void finish()
+    {
+        if (!m_editing)
+            return;
+        m_editing = false;
+        m_selecting = false;
+        if (valid_noReset())
+            m_doc->finishTextEdit(m_layer, m_before, m_isNew);
+        m_before = DocState();
+        if (m_canvas)
+            m_canvas->update();
+    }
+
+    bool valid_noReset() const
+    {
+        return m_layer >= 0 && m_layer < m_doc->layerCount() && m_doc->layer(m_layer).text.pos == m_text.pos;
+    }
+
+    bool m_editing = false;
+    bool m_isNew = false;
+    bool m_selecting = false;
+    int m_layer = -1;
+    int m_cursor = 0;
+    int m_anchor = 0;
+    TextData m_text;
+    DocState m_before;
 };
 
 class HandTool : public Tool {
@@ -1440,7 +1732,7 @@ QString Tool::hint(Id id)
     case LineShape:
     case RectShape:
     case EllipseShape: return QObject::tr("Drag to draw. Shift constrains proportions / angle.");
-    case Text: return QObject::tr("Click to add a text layer · click on the active text layer to edit it");
+    case Text: return QObject::tr("Click to type on the image · click text to edit it · Esc or click elsewhere to finish");
     case Hand: return QObject::tr("Drag to pan. Hold Space with any tool to pan temporarily.");
     case Zoom: return QObject::tr("Click to zoom in · Right-click or Alt-click to zoom out · Ctrl+wheel zooms");
     case Count: break;

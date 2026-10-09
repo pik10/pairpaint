@@ -4,6 +4,7 @@
 #include "Document.h"
 
 #include "Filters.h"
+#include "TextBox.h"
 
 #include <QFileInfo>
 #include <QFontMetricsF>
@@ -382,19 +383,12 @@ QImage renderText(const TextData &t, const QSize &size)
     QPainter p(&img);
     p.setRenderHint(QPainter::Antialiasing, t.antialias);
     p.setRenderHint(QPainter::TextAntialiasing, t.antialias);
-    QFont font = t.font;
-    if (!t.antialias)
-        font.setStyleStrategy(QFont::NoAntialias);
-    p.setFont(font);
     p.setPen(t.color);
-    p.drawText(QRectF(t.pos, QSizeF(1e6, 1e6)), Qt::AlignLeft | Qt::AlignTop, t.text);
+    TextBox(t).draw(p);
     return img;
 }
 
-QRectF textBounds(const TextData &t)
-{
-    return QFontMetricsF(t.font).boundingRect(QRectF(t.pos, QSizeF(1e6, 1e6)), Qt::AlignLeft | Qt::AlignTop, t.text);
-}
+QRectF textBounds(const TextData &t) { return TextBox(t).bounds(); }
 
 QRect alphaBounds(const QImage &img)
 {
@@ -813,6 +807,56 @@ void Document::setText(int i, const TextData &text)
     l.text = text;
     l.image = renderText(text, size());
     finish(tr("Edit Text"), before);
+}
+
+int Document::beginTextLayer(const TextData &text)
+{
+    Layer l;
+    l.name = tr("Text");
+    l.text = text;
+    l.image = renderText(text, size());
+    m_state.active = insertionIndex();
+    m_state.layers.insert(m_state.active, l);
+    m_editMask = false;
+    emit structureChanged();
+    emit imageChanged(textBounds(text).toAlignedRect() & rect());
+    return m_state.active;
+}
+
+void Document::setTextLive(int i, const TextData &text)
+{
+    Layer &l = layer(i);
+    // Repaint the old and new text area, with room for italic overhang.
+    const qreal slack = std::max<qreal>(4, text.font.pixelSize() * 0.5);
+    const QRectF dirty = textBounds(l.text) | textBounds(text);
+    l.text = text;
+    l.image = renderText(text, size());
+    emit imageChanged(dirty.adjusted(-slack, -slack, slack, slack).toAlignedRect() & rect());
+}
+
+void Document::finishTextEdit(int i, const DocState &before, bool isNew)
+{
+    Layer &l = layer(i);
+    if (l.text.text.isEmpty()) {
+        if (isNew || layerCount() <= 1) {
+            setState(before);  // nothing was typed: no layer, no undo step
+            return;
+        }
+        m_state.layers.removeAt(i);  // all text deleted: the layer goes too
+        m_state.active = std::clamp(i - 1, 0, layerCount() - 1);
+        finish(tr("Delete Layer"), before);
+        return;
+    }
+    if (!isNew) {
+        const TextData &old = before.layers.at(i).text;
+        if (old.text == l.text.text && old.font == l.text.font && old.color == l.text.color && old.pos == l.text.pos
+            && old.antialias == l.text.antialias)
+            return;  // no changes
+        if (before.layers.at(i).name != textLayerName(old))
+            return finish(tr("Edit Text"), before);  // keep a name the user chose
+    }
+    l.name = textLayerName(l.text);
+    finish(isNew ? tr("Text") : tr("Edit Text"), before);
 }
 
 void Document::rasterizeLayer(int i)

@@ -60,6 +60,9 @@ protected:
     void leaveEvent(QEvent *) override;
     void focusOutEvent(QFocusEvent *) override;
     void tabletEvent(QTabletEvent *e) override;
+    bool event(QEvent *e) override;
+    void inputMethodEvent(QInputMethodEvent *e) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 private:
     Tool *tool() const;
@@ -67,6 +70,7 @@ private:
     void onImageChanged(const QRect &r);
     void rebuildAnts();
     void drawAnts(QPainter &p);
+    void syncInputMethod();  // keyboard text input is on only while the tool is typing
 
     Document *m_doc;
     ToolManager *m_tools;

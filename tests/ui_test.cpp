@@ -473,6 +473,101 @@ static void testBlendingAndClipping()
     delete fromPsd;
 }
 
+
+// Typing text directly on the canvas with the Text tool.
+static void testOnCanvasText(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    w.addDocument(new Document(QSize(300, 200), Qt::white));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    c->setFocus();
+    auto click = [&](QPointF imagePos, Qt::KeyboardModifiers mods = {}) {
+        const QPointF wp = c->mapFromImage(imagePos);
+        mouse(c, QEvent::MouseButtonPress, wp, Qt::LeftButton, Qt::LeftButton, mods);
+        mouse(c, QEvent::MouseButtonRelease, wp, Qt::LeftButton, Qt::NoButton, mods);
+    };
+    auto shortcutTaken = [&](int key, const QString &text) {
+        QKeyEvent ov(QEvent::ShortcutOverride, key, Qt::NoModifier, text);
+        ov.ignore();
+        QApplication::sendEvent(c, &ov);
+        return ov.isAccepted();
+    };
+    QFont font(QStringLiteral("Sans Serif"));
+    font.setPixelSize(30);
+    settings->setTextStyle(font, true);
+    settings->setForeground(Qt::red);
+    tools->setCurrent(Tool::Text);
+    CHECK(!shortcutTaken(Qt::Key_B, "b"));   // not typing: B still means Brush
+
+    const int undoBefore = d->undoStack()->count();
+    click({40, 60});
+    CHECK(d->layerCount() == 2 && tools->current()->capturesKeyboard());
+    CHECK(shortcutTaken(Qt::Key_B, "b"));    // typing: letters go to the text, not to shortcuts
+    QTest::keyClicks(c, "Hello");
+    CHECK(tools->currentId() == Tool::Text);  // "H" did not switch to the Hand tool
+    CHECK(d->activeLayer().text.text == "Hello");
+    CHECK(alphaBounds(d->activeLayer().image).isValid());
+    CHECK(d->activeLayer().image.pixelColor(alphaBounds(d->activeLayer().image).center()).alpha() >= 0);
+
+    QTest::keyClick(c, Qt::Key_Home, Qt::ShiftModifier);  // select the line...
+    QTest::keyClicks(c, "Bye");                            // ...and replace it
+    CHECK(d->activeLayer().text.text == "Bye");
+    QTest::keyClick(c, Qt::Key_Return);
+    QTest::keyClicks(c, "Z");
+    CHECK(d->activeLayer().text.text == "Bye\nZ");
+    QTest::keyClick(c, Qt::Key_Backspace);
+    QTest::keyClick(c, Qt::Key_Backspace);
+    CHECK(d->activeLayer().text.text == "Bye");
+    QTest::keyClick(c, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(c, Qt::Key_X, Qt::ControlModifier);
+    CHECK(d->activeLayer().text.text.isEmpty());
+    QTest::keyClick(c, Qt::Key_V, Qt::ControlModifier);
+    QTest::keyClick(c, Qt::Key_Left);
+    QTest::keyClicks(c, "!");
+    CHECK(d->activeLayer().text.text == "By!e");
+    QTest::keyClick(c, Qt::Key_Backspace);
+    QTest::keyClick(c, Qt::Key_End);
+    QTest::keyClicks(c, "!");
+    CHECK(d->activeLayer().text.text == "Bye!");
+    CHECK(d->activeLayer().text.color == QColor(Qt::red));
+
+    // Esc finishes: one undo step that removes the whole text layer
+    QTest::keyClick(c, Qt::Key_Escape);
+    CHECK(!tools->current()->capturesKeyboard());
+    CHECK(d->undoStack()->count() == undoBefore + 1 && d->undoStack()->undoText() == "Text");
+    CHECK(d->activeLayer().isText() && d->activeLayer().name == "Bye!");
+    d->undoStack()->undo();
+    CHECK(d->layerCount() == 1);
+    d->undoStack()->redo();
+    CHECK(d->layerCount() == 2 && d->activeLayer().text.text == "Bye!");
+
+    // Click on the text to edit it in place; the options bar applies live
+    const QRectF bounds = textBounds(d->activeLayer().text);
+    click(QPointF(bounds.right() - 1, bounds.center().y()));
+    CHECK(tools->current()->capturesKeyboard() && d->layerCount() == 2);
+    QTest::keyClick(c, Qt::Key_End);
+    QTest::keyClicks(c, "?");
+    font.setPixelSize(60);
+    settings->font = font;
+    tools->current()->settingsChanged();
+    CHECK(textBounds(d->activeLayer().text).height() > bounds.height() * 1.5);
+    settings->setForeground(Qt::blue);
+    CHECK(d->activeLayer().text.color == QColor(Qt::blue));
+    tools->setCurrent(Tool::Move);              // switching tools also finishes
+    CHECK(d->undoStack()->undoText() == "Edit Text" && d->activeLayer().text.text == "Bye!?");
+    d->undoStack()->undo();
+    CHECK(d->activeLayer().text.text == "Bye!" && d->activeLayer().text.color == QColor(Qt::red));
+
+    // Clicking empty space and leaving without typing adds nothing
+    tools->setCurrent(Tool::Text);
+    const int layers = d->layerCount(), steps = d->undoStack()->count();
+    click({200, 160});
+    QTest::keyClick(c, Qt::Key_Escape);
+    CHECK(d->layerCount() == layers && d->undoStack()->count() == steps);
+    tools->setCurrent(Tool::Brush);
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -834,6 +929,7 @@ int main(int argc, char **argv) {
     testLayerStyles();
     testGroups(w, tools, settings);
     testBlendingAndClipping();
+    testOnCanvasText(w, tools, settings);
     testPhotoshopFiles();
     {
         // Regression: destroying a window with unsaved changes used to crash.

@@ -38,8 +38,9 @@ You can also [build from source](#building).
 - **Layer masks**: reveal all / from selection, paint on the mask with any tool, disable, apply, delete
 - **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves,
   Hue/Saturation, Invert, Threshold, Posterize. Double-click one to edit it.
-- **Editable text layers**: font, size, color, bold/italic; click with the Text tool or double-click
-  the layer to edit; moving keeps it editable, painting on it rasterizes it
+- **Text on the canvas**: click and type directly on the image; click existing text to edit it in place
+  (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
+  editable when moved, and become pixels only when painted on
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Magic Wand,
   Crop, Eyedropper, Brush, Eraser, Clone Stamp, Healing Brush, Smudge, Dodge, Burn, Paint Bucket,
   Gradient (linear/radial),
