@@ -18,7 +18,7 @@
 namespace {
 
 constexpr quint32 kMagic = 0x50504E54;  // "PPNT"
-constexpr quint32 kVersion = 3;  // 2: masks, adjustment layers, text layers; 3: layer styles
+constexpr quint32 kVersion = 4;  // 2: masks, adjustment layers, text; 3: layer styles; 4: groups
 const QString kProjectSuffix = QStringLiteral("pairpaint");
 
 QString projectFilterEntry() { return QObject::tr("PairPaint Project (*.pairpaint)"); }
@@ -129,6 +129,12 @@ Document *loadProject(const QString &path, QString *error)
             st.strokeOpacity = v[6];
             st.strokeSize = v[7];
         }
+        if (version >= 4) {
+            qint32 kind = 0;
+            in >> kind >> l.collapsed;
+            if (kind == int(LayerKind::Group) || kind == int(LayerKind::GroupEnd))
+                l.kind = LayerKind(kind);
+        }
         s.layers.append(l);
     }
     if (in.status() != QDataStream::Ok) {
@@ -222,6 +228,7 @@ bool saveProject(const Document *doc, const QString &path, QString *error)
         for (int v : {st.shadowOpacity, st.shadowAngle, st.shadowDistance, st.shadowSize, st.glowOpacity,
                       st.glowSize, st.strokeOpacity, st.strokeSize, 0, 0, 0})  // 3 spare slots
             out << qint32(v);
+        out << qint32(l.kind) << l.collapsed;
     }
     if (out.status() != QDataStream::Ok || !f.commit()) {
         *error = f.errorString();

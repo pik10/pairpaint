@@ -325,9 +325,14 @@ Document *readPsd(QFile &f)
                     }
                     r.seek(start + ch.length);
                 }
-                if (rec.sectionType != 0)
-                    continue;  // group markers carry no pixels
                 Layer l;
+                // Groups: type 1/2 is the group header (open/closed), 3 the marker below its layers.
+                if (rec.sectionType == 1 || rec.sectionType == 2) {
+                    l.kind = LayerKind::Group;
+                    l.collapsed = rec.sectionType == 2;
+                } else if (rec.sectionType == 3) {
+                    l.kind = LayerKind::GroupEnd;
+                }
                 l.name = rec.name.isEmpty() ? QObject::tr("Layer") : rec.name;
                 l.opacity = rec.opacity / 255.0;
                 l.visible = !(rec.flags & 2);
@@ -529,20 +534,31 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
 
     // Encode channel data first so the records can state each channel's length.
     QList<QList<QPair<int, QByteArray>>> channelData;
+    // Group headers and end markers have no pixels: empty channels (an empty plane means
+    // "raw, no data"), and a zero-sized layer rectangle below.
     for (const Layer &l : layers) {
-        const QList<QByteArray> planes = planesOf(l.image);
-        QList<QPair<int, QByteArray>> chans = {{-1, planes[3]}, {0, planes[0]}, {1, planes[1]}, {2, planes[2]}};
-        if (!l.mask.isNull())
+        QList<QPair<int, QByteArray>> chans;
+        if (l.kind == LayerKind::Normal) {
+            const QList<QByteArray> planes = planesOf(l.image);
+            chans = {{-1, planes[3]}, {0, planes[0]}, {1, planes[1]}, {2, planes[2]}};
+        } else {
+            chans = {{-1, {}}, {0, {}}, {1, {}}, {2, {}}};
+        }
+        if (!l.mask.isNull() && !l.isGroupEnd())
             chans.append({-2, maskPlane(l.mask)});
         for (auto &c : chans)
-            c.second = encodePlane(c.second, w, h);
+            if (!c.second.isEmpty())
+                c.second = encodePlane(c.second, w, h);
         channelData << chans;
     }
 
     li << qint16(layers.size());
     for (int i = 0; i < layers.size(); ++i) {
         const Layer &l = layers[i];
-        li << qint32(0) << qint32(0) << qint32(h) << qint32(w);
+        if (l.kind == LayerKind::Normal)
+            li << qint32(0) << qint32(0) << qint32(h) << qint32(w);
+        else
+            li << qint32(0) << qint32(0) << qint32(0) << qint32(0);
         li << quint16(channelData[i].size());
         for (const auto &[id, data] : channelData[i])
             li << qint16(id) << quint32(2 + data.size());
@@ -553,14 +569,15 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
         QByteArray extra;
         QDataStream ex(&extra, QIODevice::WriteOnly);
         ex.setByteOrder(QDataStream::BigEndian);
-        if (!l.mask.isNull()) {
+        if (!l.mask.isNull() && !l.isGroupEnd()) {
             ex << quint32(20) << qint32(0) << qint32(0) << qint32(h) << qint32(w)
                << quint8(255) << quint8(l.maskEnabled ? 0 : 2) << quint16(0);
         } else {
             ex << quint32(0);
         }
         ex << quint32(0);  // blending ranges
-        QByteArray name = l.name.toLocal8Bit().left(255);
+        const QString layerName = l.isGroupEnd() ? QStringLiteral("</Layer group>") : l.name;
+        QByteArray name = layerName.toLocal8Bit().left(255);
         ex << quint8(name.size());
         ex.writeRawData(name.constData(), int(name.size()));
         for (int pad = (4 - (1 + name.size()) % 4) % 4; pad > 0; --pad)
@@ -568,19 +585,27 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
         // Unicode name
         ex.writeRawData("8BIM", 4);
         ex.writeRawData("luni", 4);
-        quint32 len = 4 + 2 * quint32(l.name.size());
+        quint32 len = 4 + 2 * quint32(layerName.size());
         const quint32 padded = (len + 3) & ~3u;
-        ex << padded << quint32(l.name.size());
-        for (QChar c : l.name)
+        ex << padded << quint32(layerName.size());
+        for (QChar c : layerName)
             ex << quint16(c.unicode());
         for (quint32 k = len; k < padded; ++k)
             ex << quint8(0);
+        if (l.kind != LayerKind::Normal) {
+            // Section divider: 1 = open group, 2 = closed group, 3 = end marker.
+            ex.writeRawData("8BIM", 4);
+            ex.writeRawData("lsct", 4);
+            ex << quint32(12) << quint32(l.isGroupEnd() ? 3 : l.collapsed ? 2 : 1);
+            ex.writeRawData("8BIM", 4);
+            ex.writeRawData(keyForMode(l.mode).constData(), 4);
+        }
         li << quint32(extra.size());
         li.writeRawData(extra.constData(), int(extra.size()));
     }
     for (const auto &chans : channelData)
         for (const auto &[id, data] : chans) {
-            li << quint16(1);  // RLE
+            li << quint16(data.isEmpty() ? 0 : 1);  // raw (nothing) or RLE
             li.writeRawData(data.constData(), int(data.size()));
         }
     if (layerInfo.size() % 2)

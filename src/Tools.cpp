@@ -909,12 +909,23 @@ public:
 private:
     void begin()
     {
-        // Moving part of a text layer turns it into pixels; moving all of it keeps it editable.
-        if (m_doc->hasSelection())
-            m_doc->prepareForPixelEdit();
         m_before = m_doc->state();
         m_moved = false;
         m_delta = QPoint();
+        m_groupMembers.clear();
+        if (m_doc->activeLayer().isGroup() && !m_doc->editingMask()) {
+            // Moving a group moves every layer inside it.
+            const int header = m_doc->activeIndex();
+            for (int i = m_doc->groupEndFor(header) + 1; i < header; ++i)
+                if (m_doc->layer(i).kind == LayerKind::Normal)
+                    m_groupMembers << i;
+            return;
+        }
+        // Moving part of a text layer turns it into pixels; moving all of it keeps it editable.
+        if (m_doc->hasSelection()) {
+            m_doc->prepareForPixelEdit();
+            m_before = m_doc->state();
+        }
         m_pixels.lift(m_doc);
     }
 
@@ -922,13 +933,35 @@ private:
     {
         m_delta = d;
         m_moved = true;
+        if (!m_groupMembers.isEmpty()) {
+            auto shift = [&](const QImage &img, const QColor &fill) {
+                QImage out(img.size(), QImage::Format_ARGB32_Premultiplied);
+                out.fill(fill);
+                QPainter p(&out);
+                p.setCompositionMode(QPainter::CompositionMode_Source);
+                p.drawImage(d, img);
+                return out;
+            };
+            for (int i : std::as_const(m_groupMembers)) {
+                const Layer &orig = m_before.layers.at(i);
+                Layer &l = m_doc->layer(i);
+                l.image = shift(orig.image, Qt::transparent);
+                if (!orig.mask.isNull())
+                    l.mask = shift(orig.mask, Qt::white);
+            }
+            m_doc->notifyImageChanged();
+            return;
+        }
         m_pixels.place(m_doc, QTransform::fromTranslate(d.x(), d.y()));
     }
 
     void end()
     {
         if (m_moved) {
-            if (!m_doc->editingMask() && m_doc->activeLayer().isText())
+            for (int i : std::as_const(m_groupMembers))
+                if (m_doc->layer(i).isText())
+                    m_doc->layer(i).text.pos = m_before.layers.at(i).text.pos + m_delta;
+            if (m_groupMembers.isEmpty() && !m_doc->editingMask() && m_doc->activeLayer().isText())
                 m_doc->activeLayer().text.pos += m_delta;
             m_doc->commit(name(Move), m_before);
             m_doc->notifyStructureChanged();
@@ -943,6 +976,7 @@ private:
     QPoint m_delta;
     DocState m_before;
     FloatingPixels m_pixels;
+    QList<int> m_groupMembers;  // layers moved together when a group is active
 };
 
 // ---------------------------------------------------------------------------
@@ -1060,7 +1094,7 @@ private:
 
     void begin()
     {
-        if (m_active || !m_doc)
+        if (m_active || !m_doc || !m_doc->canEditPixels())
             return;
         m_doc->prepareForPixelEdit();
         const QImage &img = m_doc->targetImage();
@@ -1412,6 +1446,17 @@ QString Tool::hint(Id id)
     case Count: break;
     }
     return {};
+}
+
+bool Tool::editsPixels(Id id)
+{
+    switch (id) {
+    case Transform: case Brush: case Eraser: case CloneStamp: case Healing: case Smudge: case Dodge: case Burn:
+    case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
+        return true;
+    default:
+        return false;
+    }
 }
 
 ToolManager::ToolManager(ToolSettings *settings, QObject *parent) : QObject(parent), m_settings(settings)

@@ -162,7 +162,7 @@ QImage renderWithEffects(const Layer &l, const QRect &r)
 // Composites one layer onto `out`, which holds the document region `r`.
 void compositeLayer(QImage &out, const Layer &l, const QRect &r)
 {
-    if (!l.visible || l.opacity <= 0.0)
+    if (!l.visible || l.opacity <= 0.0 || l.kind != LayerKind::Normal)
         return;
     if (l.isAdjustment()) {
         blendAdjustment(out, l, r);
@@ -179,6 +179,53 @@ void compositeLayer(QImage &out, const Layer &l, const QRect &r)
         p.drawImage(0, 0, part);
     } else {
         p.drawImage(QPoint(0, 0), l.image, r);
+    }
+}
+
+// For every GroupEnd marker the index of its header, and vice versa (-1 if unmatched).
+QList<int> matchGroups(const QList<Layer> &layers)
+{
+    QList<int> match(layers.size(), -1);
+    QList<int> open;
+    for (int i = 0; i < layers.size(); ++i) {
+        if (layers[i].isGroupEnd()) {
+            open.append(i);
+        } else if (layers[i].isGroup() && !open.isEmpty()) {
+            const int e = open.takeLast();
+            match[e] = i;
+            match[i] = e;
+        }
+    }
+    return match;
+}
+
+// Composites layers [begin, end) onto `out`. A group's layers are composited on their
+// own first, then blended in with the group's opacity, mode and mask.
+void compositeRange(QImage &out, const QList<Layer> &layers, const QList<int> &match, int begin, int end,
+                    const QRect &r)
+{
+    for (int i = begin; i < end; ++i) {
+        const Layer &l = layers[i];
+        if (l.isGroupEnd()) {
+            const int h = match[i];
+            if (h < 0)
+                continue;
+            const Layer &g = layers[h];
+            if (g.visible && g.opacity > 0.0) {
+                QImage group(r.size(), QImage::Format_ARGB32_Premultiplied);
+                group.fill(Qt::transparent);
+                compositeRange(group, layers, match, i + 1, h, r);
+                if (!g.mask.isNull() && g.maskEnabled)
+                    multiplyByMask(group, g.mask, r);
+                QPainter p(&out);
+                p.setOpacity(g.opacity);
+                p.setCompositionMode(g.mode);
+                p.drawImage(0, 0, group);
+            }
+            i = h;
+            continue;
+        }
+        compositeLayer(out, l, r);
     }
 }
 
@@ -298,6 +345,13 @@ Document::Document(const DocState &state, QObject *parent) : QObject(parent), m_
     init();
 }
 
+Document::~Document()
+{
+    // Destroying the undo stack clears it, which emits cleanChanged; don't let that
+    // reach (possibly half-destroyed) listeners through titleChanged.
+    disconnect(&m_undo, nullptr, this, nullptr);
+}
+
 void Document::init()
 {
     static int untitledCounter = 0;
@@ -375,8 +429,8 @@ void Document::syncEditTarget()
     const Layer &l = activeLayer();
     if (l.mask.isNull())
         m_editMask = false;
-    else if (l.isAdjustment())
-        m_editMask = true;  // adjustment layers have no pixels of their own
+    else if (l.isAdjustment() || l.isGroup())
+        m_editMask = true;  // adjustment layers and groups have no pixels of their own
 }
 
 bool Document::editingMask() const { return m_editMask && !activeLayer().mask.isNull(); }
@@ -385,7 +439,7 @@ void Document::setEditingMask(bool mask)
 {
     if (mask && activeLayer().mask.isNull())
         return;
-    if (!mask && activeLayer().isAdjustment())
+    if (!mask && (activeLayer().isAdjustment() || activeLayer().isGroup()))
         return;
     if (m_editMask == mask)
         return;
@@ -396,6 +450,11 @@ void Document::setEditingMask(bool mask)
 QImage &Document::targetImage() { return editingMask() ? activeLayer().mask : activeLayer().image; }
 
 const QImage &Document::targetImage() const { return editingMask() ? activeLayer().mask : activeLayer().image; }
+
+bool Document::canEditPixels() const
+{
+    return editingMask() || activeLayer().kind == LayerKind::Normal;
+}
 
 void Document::prepareForPixelEdit()
 {
@@ -410,8 +469,7 @@ QImage Document::composite(const QRect &r) const
 {
     QImage out(r.size(), QImage::Format_ARGB32_Premultiplied);
     out.fill(Qt::transparent);
-    for (const Layer &l : m_state.layers)
-        compositeLayer(out, l, r);
+    compositeRange(out, m_state.layers, matchGroups(m_state.layers), 0, layerCount(), r);
     return out;
 }
 
@@ -598,11 +656,8 @@ void Document::smoothSelection(double radius)
 
 void Document::selectLayerTransparency()
 {
-    const Layer &l = activeLayer();
-    QImage part = l.image.copy();
-    if (!l.mask.isNull() && l.maskEnabled)
-        multiplyByMask(part, l.mask, rect());
-    selectMask(part.convertToFormat(QImage::Format_Alpha8), SelectionOp::Replace, tr("Load Selection"));
+    selectMask(renderLayer(m_state.active).convertToFormat(QImage::Format_Alpha8), SelectionOp::Replace,
+               tr("Load Selection"));
 }
 
 // ---------------------------------------------------------------------------
@@ -615,8 +670,8 @@ void Document::addLayer(const QString &name, const QImage &content, const QStrin
     l.name = name.isEmpty() ? tr("Layer %1").arg(++m_layerCounter) : name;
     l.image = content.isNull() ? blankLayer(size())
                                : content.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    m_state.layers.insert(m_state.active + 1, l);
-    ++m_state.active;
+    m_state.active = insertionIndex();
+    m_state.layers.insert(m_state.active, l);
     m_editMask = false;
     finish(undoText.isEmpty() ? tr("New Layer") : undoText, before);
 }
@@ -629,8 +684,8 @@ void Document::addAdjustmentLayer(const Adjustment &adjustment, bool undoable)
     l.image = blankLayer(size());
     l.mask = blankLayer(size(), Qt::white);
     l.adjustment = adjustment;
-    m_state.layers.insert(m_state.active + 1, l);
-    ++m_state.active;
+    m_state.active = insertionIndex();
+    m_state.layers.insert(m_state.active, l);
     m_editMask = true;
     if (undoable) {
         finish(tr("New %1 Layer").arg(l.name), before);
@@ -647,8 +702,8 @@ void Document::addTextLayer(const TextData &text)
     l.name = textLayerName(text);
     l.text = text;
     l.image = renderText(text, size());
-    m_state.layers.insert(m_state.active + 1, l);
-    ++m_state.active;
+    m_state.active = insertionIndex();
+    m_state.layers.insert(m_state.active, l);
     m_editMask = false;
     finish(tr("Text"), before);
 }
@@ -678,20 +733,31 @@ void Document::rasterizeLayer(int i)
 void Document::duplicateLayer()
 {
     const DocState before = m_state;
-    Layer l = activeLayer();
-    l.name = tr("%1 copy").arg(l.name);
-    m_state.layers.insert(m_state.active + 1, l);
-    ++m_state.active;
+    const auto [first, last] = blockOf(m_state.active);
+    QList<Layer> copy = m_state.layers.mid(first, last - first + 1);
+    copy.last().name = tr("%1 copy").arg(copy.last().name);
+    for (int k = 0; k < copy.size(); ++k)
+        m_state.layers.insert(last + 1 + k, copy[k]);
+    m_state.active = last + int(copy.size());
     finish(tr("Duplicate Layer"), before);
 }
 
 void Document::deleteLayer()
 {
-    if (layerCount() <= 1)
-        return;
+    const auto [first, last] = blockOf(m_state.active);
+    int remaining = 0;
+    for (int i = 0; i < layerCount(); ++i)
+        remaining += (i < first || i > last) && layer(i).kind == LayerKind::Normal;
+    if (remaining == 0)
+        return;  // keep at least one layer
     const DocState before = m_state;
-    m_state.layers.removeAt(m_state.active);
-    m_state.active = std::min(m_state.active, layerCount() - 1);
+    m_state.layers.remove(first, last - first + 1);
+    int a = std::min(first, layerCount() - 1);
+    while (a > 0 && layer(a).isGroupEnd())
+        --a;
+    while (a < layerCount() - 1 && layer(a).isGroupEnd())
+        ++a;
+    m_state.active = a;
     m_editMask = false;
     finish(tr("Delete Layer"), before);
 }
@@ -699,8 +765,25 @@ void Document::deleteLayer()
 void Document::mergeDown()
 {
     const int a = m_state.active;
-    if (a <= 0 || layer(a - 1).isAdjustment())
+    if (layer(a).isGroup()) {
+        // Merge Group: the group becomes one layer that looks the same.
+        const DocState before = m_state;
+        const auto [first, last] = blockOf(a);
+        Layer merged;
+        merged.name = layer(a).name;
+        merged.image = renderLayer(a);  // contents and mask, at full opacity
+        merged.opacity = layer(a).opacity;
+        merged.mode = layer(a).mode;
+        merged.visible = layer(a).visible;
+        m_state.layers.remove(first, last - first + 1);
+        m_state.layers.insert(first, merged);
+        m_state.active = first;
+        m_editMask = false;
+        finish(tr("Merge Group"), before);
         return;
+    }
+    if (a <= 0 || layer(a - 1).kind != LayerKind::Normal || layer(a - 1).isAdjustment())
+        return;  // nothing suitable directly below (bottom of a group, a group, or an adjustment layer)
     const DocState before = m_state;
     const Layer upper = m_state.layers.at(a);
     Layer &lower = m_state.layers[a - 1];
@@ -715,14 +798,119 @@ void Document::mergeDown()
 
 void Document::moveLayer(int delta)
 {
-    const int from = m_state.active;
-    const int to = from + delta;
-    if (to < 0 || to >= layerCount())
+    // The layer (or whole group) swaps places with the item next to it. Passing a group's
+    // top or bottom edge moves it into or out of that group, as in Photoshop.
+    const auto [first, last] = blockOf(m_state.active);
+    if (delta > 0 && last + 1 < layerCount()) {
+        const DocState before = m_state;
+        m_state.layers.move(last + 1, first);
+        ++m_state.active;
+        finish(tr("Raise Layer"), before);
+    } else if (delta < 0 && first > 0) {
+        const DocState before = m_state;
+        m_state.layers.move(first - 1, last);
+        --m_state.active;
+        finish(tr("Lower Layer"), before);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Groups
+
+QPair<int, int> Document::blockOf(int i) const
+{
+    if (layer(i).isGroup()) {
+        const int e = groupEndFor(i);
+        if (e >= 0)
+            return {e, i};
+    }
+    return {i, i};
+}
+
+int Document::groupEndFor(int header) const
+{
+    int depth = 0;
+    for (int i = header - 1; i >= 0; --i) {
+        if (layer(i).isGroup()) {
+            ++depth;
+        } else if (layer(i).isGroupEnd()) {
+            if (depth == 0)
+                return i;
+            --depth;
+        }
+    }
+    return -1;
+}
+
+int Document::parentGroup(int i) const
+{
+    int depth = 0;
+    for (int j = i + 1; j < layerCount(); ++j) {
+        if (layer(j).isGroupEnd()) {
+            ++depth;
+        } else if (layer(j).isGroup()) {
+            if (depth == 0)
+                return j;
+            --depth;
+        }
+    }
+    return -1;
+}
+
+int Document::insertionIndex() const
+{
+    // With a group selected, new layers go inside it, at the top.
+    return activeLayer().isGroup() ? m_state.active : m_state.active + 1;
+}
+
+namespace {
+Layer groupLayer(LayerKind kind, const QString &name, const QSize &size)
+{
+    Layer l;
+    l.kind = kind;
+    l.name = name;
+    l.image = blankLayer(size);
+    return l;
+}
+} // namespace
+
+void Document::newGroup()
+{
+    const DocState before = m_state;
+    const int at = insertionIndex();
+    m_state.layers.insert(at, groupLayer(LayerKind::GroupEnd, QString(), size()));
+    m_state.layers.insert(at + 1, groupLayer(LayerKind::Group, tr("Group %1").arg(++m_layerCounter), size()));
+    m_state.active = at + 1;
+    m_editMask = false;
+    finish(tr("New Group"), before, Structure);
+}
+
+void Document::groupActiveLayer()
+{
+    const DocState before = m_state;
+    const auto [first, last] = blockOf(m_state.active);
+    m_state.layers.insert(last + 1, groupLayer(LayerKind::Group, tr("Group %1").arg(++m_layerCounter), size()));
+    m_state.layers.insert(first, groupLayer(LayerKind::GroupEnd, QString(), size()));
+    m_state.active = last + 2;
+    m_editMask = false;
+    finish(tr("Group Layers"), before, Structure);
+}
+
+void Document::ungroup()
+{
+    const int h = m_state.active;
+    const int e = layer(h).isGroup() ? groupEndFor(h) : -1;
+    if (e < 0)
         return;
     const DocState before = m_state;
-    m_state.layers.move(from, to);
-    m_state.active = to;
-    finish(delta > 0 ? tr("Raise Layer") : tr("Lower Layer"), before);
+    m_state.layers.removeAt(h);
+    m_state.layers.removeAt(e);
+    int a = std::clamp(h - 2, 0, layerCount() - 1);  // the group's top layer
+    while (a > 0 && layer(a).isGroupEnd())
+        --a;
+    m_state.active = a;
+    m_editMask = false;
+    finish(tr("Ungroup Layers"), before);
 }
 
 void Document::flatten()
@@ -783,6 +971,17 @@ void Document::setLayerStyle(int i, const LayerStyle &style)
 
 QImage Document::renderLayer(int i) const
 {
+    if (layer(i).isGroup()) {
+        const auto [first, last] = blockOf(i);
+        QList<Layer> block = m_state.layers.mid(first, last - first + 1);
+        Layer &g = block.last();
+        g.visible = true;
+        g.opacity = 1.0;
+        g.mode = QPainter::CompositionMode_SourceOver;
+        QImage out = blankLayer(size());
+        compositeRange(out, block, matchGroups(block), 0, int(block.size()), rect());
+        return out;
+    }
     Layer l = layer(i);
     l.visible = true;
     l.opacity = 1.0;

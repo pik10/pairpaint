@@ -26,6 +26,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTreeWidget>
 #include <cstdio>
 
 static QTemporaryDir *outputDir = nullptr;
@@ -243,6 +244,129 @@ static void testLayerStyles()
     // Clearing the style removes every effect
     d.setLayerStyle(layer, LayerStyle());
     CHECK(gray(100, 125) == 255 && gray(100, 77) == 255);
+}
+
+
+// Layer groups: compositing, structure editing, tools, Layers panel and file formats.
+static void testGroups(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    w.addDocument(new Document(QSize(200, 200), Qt::white));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    auto px = [&](int x, int y) { return d->flattened().pixelColor(x, y); };
+    auto groupCount = [](const Document *doc) {
+        int n = 0;
+        for (int i = 0; i < doc->layerCount(); ++i)
+            n += doc->layer(i).isGroup();
+        return n;
+    };
+
+    d->addLayer("Red");
+    QPainter p(&d->activeLayer().image);
+    p.fillRect(50, 50, 100, 100, Qt::red);
+    p.end();
+    const int red = d->activeIndex();
+    d->groupActiveLayer();
+    const int group = d->activeIndex();
+    CHECK(d->layer(group).isGroup() && d->layerCount() == 4 && d->parentGroup(red + 1) == group);
+
+    // Group opacity, visibility and mask apply to its contents
+    d->setLayerOpacity(group, 0.5);
+    CHECK(px(100, 100).green() > 100 && px(100, 100).red() == 255);   // pink: half red over white
+    d->setLayerOpacity(group, 1.0);
+    d->setLayerVisible(group, false);
+    CHECK(px(100, 100) == QColor(Qt::white));
+    d->setLayerVisible(group, true);
+    QPainterPath left;
+    left.addRect(0, 0, 100, 200);
+    d->selectPath(left, SelectionOp::Replace, false, "Select");
+    d->addMask(true);
+    d->deselect();
+    CHECK(px(75, 100) == QColor(Qt::red) && px(125, 100) == QColor(Qt::white));
+    d->undoStack()->undo();
+    d->undoStack()->undo();
+    CHECK(d->layer(group).mask.isNull() && px(125, 100) == QColor(Qt::red));
+
+    // An adjustment layer inside the group only affects the group's contents
+    d->setActiveIndex(group);
+    Adjustment inv;
+    inv.type = Adjustment::Invert;
+    d->addAdjustmentLayer(inv);
+    CHECK(d->parentGroup(d->activeIndex()) >= 0);             // went inside the selected group
+    CHECK(px(100, 100) == QColor(Qt::cyan));                   // red inverted
+    CHECK(px(10, 10) == QColor(Qt::white));                    // background outside the group untouched
+    d->undoStack()->undo();
+
+    // New layers go inside a selected group; moving past its edge takes a layer out
+    d->setActiveIndex(group);
+    d->addLayer("Inside");
+    const int inside = d->activeIndex();
+    CHECK(d->parentGroup(inside) == inside + 1);
+    d->setActiveIndex(1 + 1);   // "Red", the group's bottom layer (index 1 is the end marker)
+    CHECK(d->activeLayer().name == "Red");
+    d->moveLayer(-1);           // past the bottom edge: out of the group
+    CHECK(d->activeLayer().name == "Red" && d->parentGroup(d->activeIndex()) == -1);
+    d->moveLayer(1);            // and back in
+    CHECK(d->parentGroup(d->activeIndex()) >= 0);
+    d->undoStack()->undo();
+    d->undoStack()->undo();
+    d->undoStack()->undo();     // remove "Inside"
+
+    // Painting is refused while the group itself is selected
+    d->setActiveIndex(d->layerCount() - 1);
+    CHECK(d->activeLayer().isGroup() && !d->canEditPixels());
+    tools->setCurrent(Tool::Brush);
+    settings->setForeground(Qt::blue);
+    settings->opacity = 100;
+    const QImage before = d->flattened();
+    drag(c, {10, 180}, {190, 180});
+    CHECK(d->flattened() == before);
+
+    // The Move tool moves everything in the group
+    tools->setCurrent(Tool::Move);
+    drag(c, {100, 100}, {120, 100});
+    CHECK(px(55, 100) == QColor(Qt::white) && px(165, 100) == QColor(Qt::red));
+    d->undoStack()->undo();
+    CHECK(px(55, 100) == QColor(Qt::red));
+
+    // Layers panel shows the group as an expandable folder with the layer inside
+    auto *tree = w.findChild<QTreeWidget *>();
+    QTest::qWait(20);
+    QTreeWidgetItem *top = tree ? tree->topLevelItem(0) : nullptr;
+    CHECK(top && top->text(0).startsWith("Group") && top->childCount() == 1 && top->child(0)->text(0) == "Red");
+
+    // Save / load keeps the structure
+    QString err, warn;
+    const QString proj = tmpPath("groups.pairpaint");
+    CHECK(FileIO::saveProject(d, proj, &err));
+    Document *loaded = FileIO::load(proj, &err);
+    CHECK(loaded && groupCount(loaded) == 1 && loaded->layerCount() == d->layerCount());
+    CHECK(loaded && loaded->flattened() == d->flattened());
+    delete loaded;
+    const QString psd = tmpPath("groups.psd");
+    d->setLayerOpacity(d->layerCount() - 1, 0.6);
+    CHECK(Psd::write(d, psd, &err, &warn));
+    Document *fromPsd = FileIO::load(psd, &err);
+    CHECK(fromPsd && groupCount(fromPsd) == 1 && fromPsd->layerCount() == d->layerCount());
+    if (fromPsd) {
+        const QColor a = fromPsd->flattened().pixelColor(100, 100), b = d->flattened().pixelColor(100, 100);
+        CHECK(std::abs(a.green() - b.green()) <= 2);   // group opacity survived
+        delete fromPsd;
+    }
+
+    // Duplicate, delete, merge and ungroup
+    const int n = d->layerCount();
+    d->duplicateLayer();
+    CHECK(d->layerCount() == n + 3 && groupCount(d) == 2);
+    d->deleteLayer();
+    CHECK(d->layerCount() == n && groupCount(d) == 1);
+    const QImage look = d->flattened();
+    d->mergeDown();   // merge group
+    CHECK(groupCount(d) == 0 && d->layerCount() == 2 && d->flattened() == look);
+    d->undoStack()->undo();
+    d->ungroup();
+    CHECK(groupCount(d) == 0 && d->layerCount() == 2 && d->activeLayer().name == "Red");
 }
 
 int main(int argc, char **argv) {
@@ -604,6 +728,17 @@ int main(int argc, char **argv) {
     testSelections();
     testRetouchTools(w, tools, settings);
     testLayerStyles();
+    testGroups(w, tools, settings);
+    {
+        // Regression: destroying a window with unsaved changes used to crash.
+        auto *other = new MainWindow;
+        auto *doc = new Document(QSize(50, 50), Qt::white);
+        other->addDocument(doc);
+        doc->addLayer();
+        CHECK(doc->isModified());
+        delete other;
+        CHECK(true);
+    }
 
     std::printf("\n%d failure(s)\n", fails);
     d->undoStack()->setClean();

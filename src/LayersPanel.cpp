@@ -9,7 +9,8 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QListWidget>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QMenu>
 #include <QPainter>
 #include <QSlider>
@@ -50,6 +51,18 @@ void drawBadge(QPainter &p, const QRect &cell, const QString &text)
     p.drawText(cell, Qt::AlignCenter, text);
 }
 
+void drawFolder(QPainter &p, const QRect &cell)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(214, 170, 70));
+    const QRectF body = QRectF(cell).adjusted(5, 12, -5, -8);
+    p.drawRoundedRect(QRectF(body.left(), body.top() - 5, body.width() * 0.45, 8), 2, 2);  // tab
+    p.drawRoundedRect(body, 3, 3);
+    p.restore();
+}
+
 void drawTargetFrame(QPainter &p, const QRect &cell)
 {
     p.setPen(QPen(QColor(255, 255, 255), 2));
@@ -71,7 +84,10 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     m_opacityLabel = new QLabel(QStringLiteral("100%"));
     m_opacityLabel->setMinimumWidth(36);
 
-    m_list = new QListWidget;
+    m_list = new QTreeWidget;
+    m_list->setHeaderHidden(true);
+    m_list->setIndentation(14);
+    m_list->setExpandsOnDoubleClick(false);  // double-click renames; the arrow opens and closes groups
     m_list->setIconSize(QSize(2 * kThumb + kGap, kThumb));
     m_list->setEditTriggers(QAbstractItemView::EditKeyPressed);
 
@@ -117,6 +133,7 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     };
     addButton(QStringLiteral("+"), tr("New layer"), [](Document *d) { d->addLayer(); });
     addButton(QStringLiteral("⧉"), tr("Duplicate layer"), [](Document *d) { d->duplicateLayer(); });
+    addButton(QStringLiteral("❐"), tr("New group (Ctrl+G groups the selected layer)"), [](Document *d) { d->newGroup(); });
     addButton(QStringLiteral("◐"), tr("Add layer mask (from the selection if there is one)"),
               [](Document *d) { d->addMask(true); });
 
@@ -158,23 +175,31 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     layout->addLayout(buttons);
     m_docWidgets << m_mode << m_opacity << m_list;
 
-    connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (!m_updating && m_doc && row >= 0)
-            m_doc->setActiveIndex(layerForRow(row));
+    connect(m_list, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
+        if (!m_updating && m_doc && item)
+            m_doc->setActiveIndex(item->data(0, Qt::UserRole).toInt());
     });
-    connect(m_list, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+    connect(m_list, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item) {
         if (m_updating || !m_doc)
             return;
-        const int i = item->data(Qt::UserRole).toInt();
+        const int i = item->data(0, Qt::UserRole).toInt();
         if (i < 0 || i >= m_doc->layerCount())
             return;
-        const bool visible = item->checkState() == Qt::Checked;
+        const bool visible = item->checkState(0) == Qt::Checked;
         if (visible != m_doc->layer(i).visible)
             m_doc->setLayerVisible(i, visible);
-        if (item->text() != m_doc->layer(i).name)
-            m_doc->renameLayer(i, item->text());
+        if (item->text(0) != m_doc->layer(i).name)
+            m_doc->renameLayer(i, item->text(0));
     });
-    connect(m_list, &QListWidget::itemDoubleClicked, this, &LayersPanel::onDoubleClicked);
+    connect(m_list, &QTreeWidget::itemDoubleClicked, this, &LayersPanel::onDoubleClicked);
+    // Remember open/closed groups (a view setting, so not part of undo).
+    auto setCollapsed = [this](QTreeWidgetItem *item, bool collapsed) {
+        const int i = item->data(0, Qt::UserRole).toInt();
+        if (!m_updating && m_doc && i >= 0 && i < m_doc->layerCount())
+            m_doc->layer(i).collapsed = collapsed;
+    };
+    connect(m_list, &QTreeWidget::itemExpanded, this, [setCollapsed](QTreeWidgetItem *it) { setCollapsed(it, false); });
+    connect(m_list, &QTreeWidget::itemCollapsed, this, [setCollapsed](QTreeWidgetItem *it) { setCollapsed(it, true); });
     connect(m_mode, &QComboBox::activated, this, [this](int idx) {
         if (m_doc)
             m_doc->setLayerMode(m_doc->activeIndex(), QPainter::CompositionMode(m_mode->itemData(idx).toInt()));
@@ -213,8 +238,6 @@ void LayersPanel::setDocument(Document *doc)
 
 void LayersPanel::scheduleRebuild() { m_rebuildTimer.start(); }
 
-int LayersPanel::layerForRow(int row) const { return m_doc ? m_doc->layerCount() - 1 - row : -1; }
-
 QIcon LayersPanel::thumbnailFor(int i) const
 {
     const Layer &l = m_doc->layer(i);
@@ -222,7 +245,9 @@ QIcon LayersPanel::thumbnailFor(int i) const
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     const QRect left(0, 0, kThumb, kThumb), right(kThumb + kGap, 0, kThumb, kThumb);
-    if (l.isAdjustment())
+    if (l.isGroup())
+        drawFolder(p, left);
+    else if (l.isAdjustment())
         drawBadge(p, left, Adjustments::shortName(l.adjustment.type));
     else
         drawThumb(p, left, l.image);
@@ -266,19 +291,42 @@ void LayersPanel::rebuild()
     for (QWidget *w : m_docWidgets)
         w->setEnabled(m_doc);
     if (m_doc) {
-        const int count = m_doc->layerCount();
-        for (int i = count - 1; i >= 0; --i) {
+        QList<QTreeWidgetItem *> parents;  // open groups while walking from the top layer down
+        QTreeWidgetItem *current = nullptr;
+        QList<QPair<QTreeWidgetItem *, bool>> groups;
+        for (int i = m_doc->layerCount() - 1; i >= 0; --i) {
             const Layer &l = m_doc->layer(i);
-            auto *item = new QListWidgetItem(thumbnailFor(i), l.name);
+            if (l.isGroupEnd()) {
+                if (!parents.isEmpty())
+                    parents.removeLast();
+                continue;
+            }
+            auto *item = new QTreeWidgetItem;
+            item->setIcon(0, thumbnailFor(i));
+            item->setText(0, l.name);
             item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsEditable);
-            item->setCheckState(l.visible ? Qt::Checked : Qt::Unchecked);
-            item->setData(Qt::UserRole, i);
-            item->setToolTip(l.isAdjustment() ? tr("Double-click to edit the adjustment · F2 renames")
-                             : l.isText()     ? tr("Double-click to edit the text · F2 renames")
-                                              : tr("Double-click to rename · checkbox toggles visibility"));
-            m_list->addItem(item);
+            item->setCheckState(0, l.visible ? Qt::Checked : Qt::Unchecked);
+            item->setData(0, Qt::UserRole, i);
+            item->setToolTip(0, l.isAdjustment() ? tr("Double-click to edit the adjustment · F2 renames")
+                                : l.isText()     ? tr("Double-click to edit the text · F2 renames")
+                                                 : tr("Double-click to rename · checkbox toggles visibility"));
+            if (parents.isEmpty())
+                m_list->addTopLevelItem(item);
+            else
+                parents.last()->addChild(item);
+            if (l.isGroup()) {
+                parents.append(item);
+                groups.append({item, l.collapsed});
+            }
+            if (i == m_doc->activeIndex())
+                current = item;
         }
-        m_list->setCurrentRow(count - 1 - m_doc->activeIndex());
+        for (const auto &[item, collapsed] : groups)
+            item->setExpanded(!collapsed);
+        if (current) {
+            m_list->setCurrentItem(current);
+            m_list->scrollToItem(current);
+        }
         const Layer &a = m_doc->activeLayer();
         m_mode->setCurrentIndex(std::max(0, m_mode->findData(int(a.mode))));
         m_mode->setEnabled(!a.isAdjustment());
@@ -291,7 +339,7 @@ void LayersPanel::rebuild()
 void LayersPanel::updateTargetButtons()
 {
     const bool hasMask = m_doc && !m_doc->activeLayer().mask.isNull();
-    const bool adjustment = m_doc && m_doc->activeLayer().isAdjustment();
+    const bool adjustment = m_doc && (m_doc->activeLayer().isAdjustment() || m_doc->activeLayer().isGroup());
     m_editLayer->setEnabled(hasMask && !adjustment);
     m_editMask->setEnabled(hasMask);
     const bool mask = m_doc && m_doc->editingMask();
@@ -304,19 +352,19 @@ void LayersPanel::refreshThumbnails()
     if (!m_doc)
         return;
     m_updating = true;
-    for (int row = 0; row < m_list->count(); ++row) {
-        const int i = layerForRow(row);
+    for (QTreeWidgetItemIterator it(m_list); *it; ++it) {
+        const int i = (*it)->data(0, Qt::UserRole).toInt();
         if (i >= 0 && i < m_doc->layerCount())
-            m_list->item(row)->setIcon(thumbnailFor(i));
+            (*it)->setIcon(0, thumbnailFor(i));
     }
     m_updating = false;
 }
 
-void LayersPanel::onDoubleClicked(QListWidgetItem *item)
+void LayersPanel::onDoubleClicked(QTreeWidgetItem *item)
 {
     if (!m_doc)
         return;
-    const int i = item->data(Qt::UserRole).toInt();
+    const int i = item->data(0, Qt::UserRole).toInt();
     if (i < 0 || i >= m_doc->layerCount())
         return;
     if (m_doc->layer(i).isAdjustment())
@@ -324,5 +372,5 @@ void LayersPanel::onDoubleClicked(QListWidgetItem *item)
     else if (m_doc->layer(i).isText())
         emit editTextRequested(i);
     else
-        m_list->editItem(item);
+        m_list->editItem(item, 0);
 }

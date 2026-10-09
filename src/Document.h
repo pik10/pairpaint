@@ -49,6 +49,13 @@ struct LayerStyle {
     bool operator==(const LayerStyle &o) const;
 };
 
+enum class LayerKind {
+    Normal,
+    Group,     // group header: name, visibility, opacity, blend mode and mask of the group
+    GroupEnd,  // hidden marker below the group's layers (as in Photoshop's file format)
+};
+
+// Layers are a flat list from bottom to top. A group is [GroupEnd, its layers..., Group].
 struct Layer {
     QString name;
     QImage image;  // always Format_ARGB32_Premultiplied, same size as the document
@@ -64,8 +71,12 @@ struct Layer {
     Adjustment adjustment;  // type != None makes this an adjustment layer
     TextData text;          // valid makes this an editable text layer
     LayerStyle style;
+    LayerKind kind = LayerKind::Normal;
+    bool collapsed = false;  // group shown closed in the Layers panel
 
     bool isAdjustment() const { return adjustment.type != Adjustment::None; }
+    bool isGroup() const { return kind == LayerKind::Group; }
+    bool isGroupEnd() const { return kind == LayerKind::GroupEnd; }
     bool isText() const { return text.isValid(); }
 };
 
@@ -91,6 +102,7 @@ public:
     Document(const QSize &size, const QColor &background, QObject *parent = nullptr);
     explicit Document(const QImage &image, QObject *parent = nullptr);
     explicit Document(const DocState &state, QObject *parent = nullptr);
+    ~Document() override;
 
     const DocState &state() const { return m_state; }
     void setState(const DocState &state);
@@ -105,6 +117,15 @@ public:
     const Layer &activeLayer() const { return m_state.layers.at(m_state.active); }
     Layer &activeLayer() { return m_state.layers[m_state.active]; }
     void setActiveIndex(int index);
+
+    // Groups
+    int groupEndFor(int header) const;  // index of the GroupEnd marker of group `header`
+    int parentGroup(int i) const;       // header index of the group containing `i`, or -1
+    void newGroup();
+    void groupActiveLayer();            // puts the active layer (or group) into a new group
+    void ungroup();
+    // False for a group without a mask selected: there are no pixels to paint on.
+    bool canEditPixels() const;
 
     // What painting tools and filters modify: the active layer's pixels or its mask.
     bool editingMask() const;
@@ -201,6 +222,8 @@ private:
     void updateSelectionBounds();
     void syncEditTarget();
     void modifySelection(const QString &text, const std::function<QImage(const QImage &)> &f);
+    int insertionIndex() const;          // where new layers go: above the active one, or inside its group
+    QPair<int, int> blockOf(int i) const;  // [first, last] index of a layer, or of a whole group
 
     DocState m_state;
     QUndoStack m_undo;

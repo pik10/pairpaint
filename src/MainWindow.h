@@ -48,6 +48,7 @@ private:
     QAction *addAction(QMenu *menu, const QString &text, const QKeySequence &key,
                        const std::function<void()> &fn, bool needsDocument = true);
     void withDoc(const std::function<void(Document *)> &fn);
+    bool hasPixels(Document *d);  // false (with a message) when a group without a mask is selected
     using FilterFunc = std::function<QImage(const QImage &, const QList<int> &)>;
     void runFilter(const QString &title, const QList<FilterParam> &params, const FilterFunc &fn);
     void runAdjustment(Adjustment::Type type);

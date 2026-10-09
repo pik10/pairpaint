@@ -123,6 +123,14 @@ Document *MainWindow::doc() const
     return c ? c->document() : nullptr;
 }
 
+bool MainWindow::hasPixels(Document *d)
+{
+    if (d->canEditPixels())
+        return true;
+    statusBar()->showMessage(tr("A group is selected. Select a layer inside it, or add a mask to the group."), 4000);
+    return false;
+}
+
 void MainWindow::withDoc(const std::function<void(Document *)> &fn)
 {
     if (Document *d = doc()) {
@@ -235,11 +243,11 @@ void MainWindow::createMenus()
     addAction(edit, tr("&Paste"), QKeySequence::Paste, [this] { paste(); }, false);
     addAction(edit, tr("Paste as New &Image"), QKeySequence("Ctrl+Alt+V"), [this] { pasteAsNew(); }, false);
     edit->addSeparator();
-    addAction(edit, tr("C&lear"), QKeySequence::Delete, [this] { withDoc([](Document *d) { d->clearSelected(); }); });
+    addAction(edit, tr("C&lear"), QKeySequence::Delete, [this] { withDoc([this](Document *d) { if (hasPixels(d)) d->clearSelected(); }); });
     addAction(edit, tr("&Fill with Foreground"), QKeySequence("Alt+Backspace"),
-              [this] { withDoc([this](Document *d) { d->fillSelected(m_settings->foreground()); }); });
+              [this] { withDoc([this](Document *d) { if (hasPixels(d)) d->fillSelected(m_settings->foreground()); }); });
     addAction(edit, tr("Fill with &Background"), QKeySequence("Ctrl+Backspace"),
-              [this] { withDoc([this](Document *d) { d->fillSelected(m_settings->background()); }); });
+              [this] { withDoc([this](Document *d) { if (hasPixels(d)) d->fillSelected(m_settings->background()); }); });
     edit->addSeparator();
     addAction(edit, tr("Free &Transform") + QStringLiteral("\tCtrl+T"), {}, [this] {
         m_tools->setCurrent(Tool::Transform);
@@ -289,6 +297,9 @@ void MainWindow::createMenus()
     addAction(layer, tr("&New Layer"), QKeySequence("Ctrl+Shift+N"), [this] { withDoc([](Document *d) { d->addLayer(); }); });
     addAction(layer, tr("&Duplicate Layer"), QKeySequence("Ctrl+J"), [this] { withDoc([](Document *d) { d->duplicateLayer(); }); });
     addAction(layer, tr("De&lete Layer"), {}, [this] { withDoc([](Document *d) { d->deleteLayer(); }); });
+    addAction(layer, tr("New &Group"), {}, [this] { withDoc([](Document *d) { d->newGroup(); }); });
+    addAction(layer, tr("&Group Layers"), QKeySequence("Ctrl+G"), [this] { withDoc([](Document *d) { d->groupActiveLayer(); }); });
+    addAction(layer, tr("&Ungroup Layers"), QKeySequence("Ctrl+Shift+G"), [this] { withDoc([](Document *d) { d->ungroup(); }); });
     QMenu *adjLayer = layer->addMenu(tr("New &Adjustment Layer"));
     for (int t = Adjustment::BrightnessContrast; t < Adjustment::TypeCount; ++t) {
         const auto type = Adjustment::Type(t);
@@ -920,6 +931,8 @@ void MainWindow::copy(bool merged)
 void MainWindow::cut()
 {
     withDoc([this](Document *d) {
+        if (!hasPixels(d))
+            return;
         copy(false);
         d->clearSelected();
     });
@@ -975,8 +988,8 @@ void MainWindow::canvasSize()
 void MainWindow::layerStyle()
 {
     withDoc([this](Document *d) {
-        if (d->activeLayer().isAdjustment()) {
-            statusBar()->showMessage(tr("Adjustment layers can't have layer styles."), 3000);
+        if (d->activeLayer().isAdjustment() || d->activeLayer().isGroup()) {
+            statusBar()->showMessage(tr("Layer styles can only be added to pixel and text layers."), 3000);
             return;
         }
         LayerStyleDialog dlg(d, d->activeIndex(), this);
@@ -1013,6 +1026,8 @@ void MainWindow::colorRange()
 void MainWindow::runFilter(const QString &title, const QList<FilterParam> &params, const FilterFunc &fn)
 {
     withDoc([&](Document *d) {
+        if (!hasPixels(d))
+            return;
         if (params.isEmpty()) {
             QApplication::setOverrideCursor(Qt::WaitCursor);
             d->applyToActive(title, [&](const QImage &img) { return fn(img, {}); });
@@ -1040,6 +1055,8 @@ void MainWindow::runAdjustment(Adjustment::Type type)
             runFilter(title, {}, fn);
             return;
         }
+        if (!hasPixels(d))
+            return;
         d->prepareForPixelEdit();
         FilterDialog dlg(title, adjustmentEditor(type, Adjustments::defaults(type), d->targetImage()),
                          filterTarget(d, title, fn), this);

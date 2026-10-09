@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QPointingDevice>
 #include <QTabletEvent>
+#include <QToolTip>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -323,6 +324,11 @@ void Canvas::mousePressEvent(QMouseEvent *e)
     }
     if (m_toolPressed && (e->buttons() & ~e->button()))
         return;  // ignore a second button while a tool drag is in progress
+    if (e->button() == Qt::LeftButton && Tool::editsPixels(m_tools->currentId()) && !m_doc->canEditPixels()) {
+        QToolTip::showText(e->globalPosition().toPoint(),
+                           tr("A group is selected. Select a layer inside it to paint, or add a mask to the group."));
+        return;
+    }
     m_toolPressed = true;
     tool()->press(toolEvent(e));
     update();

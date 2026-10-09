@@ -12,8 +12,8 @@
 class Document;
 class QComboBox;
 class QLabel;
-class QListWidget;
-class QListWidgetItem;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QSlider;
 class QToolButton;
 
@@ -35,11 +35,10 @@ private:
     void refreshThumbnails();
     void updateTargetButtons();
     QIcon thumbnailFor(int layer) const;
-    int layerForRow(int row) const;
-    void onDoubleClicked(QListWidgetItem *item);
+    void onDoubleClicked(QTreeWidgetItem *item);
 
     QPointer<Document> m_doc;
-    QListWidget *m_list;
+    QTreeWidget *m_list;  // top of the tree = top layer; groups are expandable
     QComboBox *m_mode;
     QSlider *m_opacity;
     QLabel *m_opacityLabel;

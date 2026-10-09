@@ -53,6 +53,7 @@ public:
     static QString name(Id id);
     static QString shortcut(Id id);
     static QString hint(Id id);
+    static bool editsPixels(Id id);  // tools that need a layer with pixels (not a group)
 
 protected:
     ToolSettings *m_settings;

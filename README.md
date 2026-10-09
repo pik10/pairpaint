@@ -9,16 +9,21 @@ Runs on Linux, Windows and macOS from the same source.
 
 - **Layers**: add, duplicate, delete, reorder, merge down, flatten, rename, show/hide, opacity,
   13 blend modes (Multiply, Screen, Overlay, Soft/Hard Light, Difference, …)
+- **Layer groups**: nest layers in folders with their own opacity, blend mode and mask; move, duplicate,
+  merge or ungroup whole groups; adjustment layers inside a group only affect that group
+- **Layer styles** (non-destructive): Drop Shadow, Outer Glow, Stroke
 - **Layer masks**: reveal all / from selection, paint on the mask with any tool, disable, apply, delete
 - **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves,
   Hue/Saturation, Invert, Threshold, Posterize. Double-click one to edit it.
 - **Editable text layers**: font, size, color, bold/italic; click with the Text tool or double-click
   the layer to edit; moving keeps it editable, painting on it rasterizes it
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Magic Wand,
-  Crop, Eyedropper, Brush, Eraser, Clone Stamp, Healing Brush, Paint Bucket, Gradient (linear/radial),
+  Crop, Eyedropper, Brush, Eraser, Clone Stamp, Healing Brush, Smudge, Dodge, Burn, Paint Bucket,
+  Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)
 - **Selections**: pixel masks with anti-aliasing, add / subtract / intersect, invert, marching ants;
+  Feather, Expand, Contract, Border, Smooth, Color Range and Load Layer Transparency;
   every paint tool and filter respects the selection; Move and Free Transform act on selected pixels
 - **Adjustments**: Levels, Curves (with histogram), Brightness/Contrast, Hue/Saturation, Desaturate,
   Invert, Threshold, Posterize
@@ -26,7 +31,7 @@ Runs on Linux, Windows and macOS from the same source.
 - **Image**: Image Size, Canvas Size (with anchor), Crop, Rotate, Flip
 - **Undo** (80 steps) with a History panel, multiple documents in tabs
 - **Files**: native `.pairpaint` project format (keeps everything); **Photoshop PSD** import (RGB, grayscale,
-  CMYK; 8/16-bit; raw/RLE/ZIP; layers, masks, blend modes) and layered export; open/export PNG, JPEG,
+  CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, blend modes) and layered export; open/export PNG, JPEG,
   WebP, BMP, TIFF, GIF, …; clipboard copy/paste; drag and drop
 
 ## Building
@@ -58,6 +63,8 @@ cmake --build build -j
 | Eyedropper | I | | New layer / duplicate / merge | Ctrl+Shift+N / Ctrl+J / Ctrl+E |
 | Brush / Eraser | B / E | | Fill fg / bg | Alt+Backspace / Ctrl+Backspace |
 | Clone Stamp / Healing | S / J | | Levels / Curves | Ctrl+L / Ctrl+M |
+| Smudge / Dodge / Burn | R / O / Shift+O | | Group / ungroup layers | Ctrl+G / Ctrl+Shift+G |
+| | | | Feather selection | Shift+F6 |
 | | | | Toggle editing mask / layer | Ctrl+\\ |
 | Paint Bucket / Gradient | K / G | | Hue/Sat, Invert, Desaturate | Ctrl+U, Ctrl+I, Ctrl+Shift+U |
 | Line / Rect / Ellipse | N / U / Shift+U | | Export | Ctrl+Shift+E |
@@ -86,7 +93,8 @@ to 15°), inside to move; Enter applies, Esc cancels.
 - Editing is 8 bits per channel RGB. 16-bit and CMYK PSD files are converted to 8-bit RGB when opened.
 - PSD export writes pixel layers and masks; adjustment layers are left out (keep them in `.pairpaint`),
   text layers are exported as pixels. Large-document PSB files are not supported.
-- Layer groups, vector shapes and layer styles are not supported (PSD groups are flattened into a plain layer list).
+- Vector shapes are not supported, and layer styles other than Drop Shadow, Outer Glow and Stroke
+  (Photoshop layer effects in PSD files are not imported).
 
 ## Tests
 
