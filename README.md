@@ -7,7 +7,7 @@ Runs on Linux, Windows and macOS from the same source.
 
 ## Download
 
-Get the latest version from the [Releases page](../../releases/latest).
+Get the latest version from the [Releases page](../../releases/latest). See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 **Windows** (10 and 11, 64-bit): `PairPaint-<version>-windows-x64-setup.exe` installs PairPaint with a
 Start menu entry. Prefer no installation? Use the `.zip`, unzip it and run `pairpaint.exe`.
