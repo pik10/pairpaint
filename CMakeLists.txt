@@ -19,6 +19,7 @@ endif()
 # Everything except main() is a library, so the tests can link against it.
 qt_add_library(pairpaint_core STATIC
     src/Adjustments.cpp src/Adjustments.h
+    src/Autosave.cpp src/Autosave.h
     src/Blending.cpp src/Blending.h
     src/Canvas.cpp src/Canvas.h
     src/ColorWidgets.cpp src/ColorWidgets.h

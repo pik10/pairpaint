@@ -224,6 +224,7 @@ public:
     void setFilePath(const QString &path);
     QString displayName() const;
     bool isModified() const { return !m_undo.isClean(); }
+    void markModified() { m_undo.resetClean(); }  // e.g. recovered after a crash: not saved anywhere
 
 signals:
     void imageChanged(const QRect &rect);

@@ -392,6 +392,11 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
 
 bool saveProject(const Document *doc, const QString &path, QString *error)
 {
+    return saveProjectState(doc->state(), path, error);
+}
+
+bool saveProjectState(const DocState &s, const QString &path, QString *error)
+{
     QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly)) {
         *error = f.errorString();
@@ -399,7 +404,6 @@ bool saveProject(const Document *doc, const QString &path, QString *error)
     }
     QDataStream out(&f);
     out.setVersion(QDataStream::Qt_6_0);
-    const DocState &s = doc->state();
     out << kMagic << kVersion << s.size << qint32(s.active) << qint32(s.layers.size());
     for (const Layer &l : s.layers) {
         out << l.name << l.visible << double(l.opacity) << qint32(l.mode)

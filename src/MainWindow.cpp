@@ -28,10 +28,12 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLocale>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProcess>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QScreen>
 #include <QSignalBlocker>
@@ -124,6 +126,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         m_antialiasBox->setChecked(m_settings->antialias);
     });
     onToolChanged(m_tools->currentId());
+
+    m_autosave = new Autosave(this);
+    m_autosave->setBusyCheck([this] {
+        for (int i = 0; i < m_tabs->count(); ++i)
+            if (auto *c = qobject_cast<Canvas *>(m_tabs->widget(i)); c && c->isToolPressed())
+                return true;
+        return false;
+    });
 
     QSettings s;
     if (!restoreGeometry(s.value("window/geometry").toByteArray())) {
@@ -671,6 +681,7 @@ void MainWindow::addDocument(Document *doc)
 {
     auto *c = new Canvas(doc, m_tools);
     m_undoGroup->addStack(doc->undoStack());
+    m_autosave->track(doc);
     connect(doc, &Document::titleChanged, this, [this, c] { updateTabTitle(c); });
     connect(doc, &Document::sizeChanged, this, &MainWindow::updateStatus);
     connect(c, &Canvas::zoomChanged, this, &MainWindow::updateStatus);
@@ -802,6 +813,61 @@ void MainWindow::openFile(const QString &path)
     QSettings().setValue("lastDir", QFileInfo(abs).absolutePath());
     if (!warning.isEmpty())
         QMessageBox::information(this, QFileInfo(abs).fileName(), warning);
+}
+
+void MainWindow::offerRecovery()
+{
+    const QList<Autosave::Recovered> copies = m_autosave->findOrphans();
+    if (copies.isEmpty()) {
+        m_autosave->discardOrphans();  // sessions that ended without unsaved work
+        return;
+    }
+    QStringList lines;
+    for (const Autosave::Recovered &r : copies)
+        lines << QStringLiteral("• %1 (%2)").arg(r.name, QLocale().toString(r.saved, QLocale::ShortFormat));
+    QMessageBox box(QMessageBox::Warning, tr("Recover Unsaved Work"),
+                    tr("PairPaint closed unexpectedly. These images had unsaved changes:\n\n%1\n\n"
+                       "Recover them? (Changes from the last few minutes before the crash may be missing.)")
+                        .arg(lines.join(QLatin1Char('\n'))),
+                    QMessageBox::NoButton, this);
+    QPushButton *recover = box.addButton(tr("Recover"), QMessageBox::AcceptRole);
+    QPushButton *discard = box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
+    box.addButton(tr("Decide Later"), QMessageBox::RejectRole);
+    box.setDefaultButton(recover);
+    box.exec();
+    if (box.clickedButton() == discard) {
+        if (QMessageBox::question(this, tr("Discard Unsaved Work"),
+                                  tr("Discard the recovered changes? This can't be undone."))
+            == QMessageBox::Yes)
+            m_autosave->discardOrphans();
+    } else if (box.clickedButton() == recover) {
+        const QStringList failed = restoreRecovered(copies);
+        if (failed.isEmpty())
+            m_autosave->discardOrphans();
+        else  // keep the copies, so nothing is lost
+            QMessageBox::warning(this, tr("Recover Unsaved Work"),
+                                 tr("These couldn't be recovered:\n%1\n\nThe copies are kept in %2.")
+                                     .arg(failed.join(QLatin1Char('\n')),
+                                          QDir::toNativeSeparators(QFileInfo(copies.first().copyPath).absolutePath())));
+    }
+}
+
+QStringList MainWindow::restoreRecovered(const QList<Autosave::Recovered> &copies)
+{
+    QStringList failed;
+    for (const Autosave::Recovered &r : copies) {
+        QString error;
+        Document *d = FileIO::load(r.copyPath, &error);
+        if (!d) {
+            failed << r.name;
+            continue;
+        }
+        if (!r.originalPath.isEmpty())
+            d->setFilePath(r.originalPath);  // Save writes back to the original file
+        d->markModified();
+        addDocument(d);
+    }
+    return failed;
 }
 
 bool MainWindow::saveDocument(int tab, bool saveAs)

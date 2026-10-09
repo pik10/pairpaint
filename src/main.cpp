@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStyleFactory>
+#include <QTimer>
 
 namespace {
 
@@ -75,5 +76,7 @@ int main(int argc, char *argv[])
     window.show();
     for (const QString &f : parser.positionalArguments())
         window.openFile(f);
+    // After a crash: offer the unsaved work, once the window is on screen.
+    QTimer::singleShot(0, &window, &MainWindow::offerRecovery);
     return app.exec();
 }

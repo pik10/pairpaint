@@ -23,6 +23,7 @@ public:
     Canvas(Document *doc, ToolManager *tools, QWidget *parent = nullptr);
 
     Document *document() const { return m_doc; }
+    bool isToolPressed() const { return m_toolPressed; }  // mid-stroke
 
     qreal zoom() const { return m_zoom; }
     void setZoom(qreal zoom, const QPointF &anchor);

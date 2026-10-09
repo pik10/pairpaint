@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Autosave and crash recovery**: every 2 minutes, images with unsaved changes are copied to a
+  recovery folder, in the background so editing doesn't pause. If PairPaint crashes or the
+  computer loses power, the next start offers to recover them (or discard them, or decide
+  later). The copies are removed when you save, close the image or quit normally.
+
 ## 0.5.0 — 2026-10-09
 
 ### New

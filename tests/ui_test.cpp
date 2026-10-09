@@ -5,6 +5,7 @@
 // with synthetic mouse/keyboard events (offscreen) and checks the resulting pixels.
 
 #include "Adjustments.h"
+#include "Autosave.h"
 #include "Canvas.h"
 #include "Document.h"
 #include "FileIO.h"
@@ -28,6 +29,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainterPath>
+#include <QProcess>
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QStyleFactory>
@@ -1205,6 +1207,133 @@ static void testHeic()
     FileIO::setMaxImagePixels(250'000'000);
 }
 
+// Autosave: recovery copies of unsaved work, removed when saved or closed, and offered again
+// after a crash (simulated by abandoning a session).
+static void testAutosave()
+{
+    const QString root = tmpPath("recovery");
+    auto copies = [](const QString &dir) { return QDir(dir).entryList({QStringLiteral("*.pairpaint")}, QDir::Files).size(); };
+    auto sessions = [&] { return QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size(); };
+    QString err;
+    {
+        Autosave a(root, 0);
+        Document d(QSize(40, 30), Qt::white);
+        a.track(&d);
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(copies(a.sessionDir()) == 0);  // nothing unsaved yet
+        d.addLayer();
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(a.hasCopy(&d) && copies(a.sessionDir()) == 1);
+        Document *copy = FileIO::load(a.sessionDir() + "/1.pairpaint", &err);
+        CHECK(copy && copy->layerCount() == 2);  // a complete project
+        delete copy;
+        d.undoStack()->setClean();  // saved: the copy goes
+        CHECK(!a.hasCopy(&d) && copies(a.sessionDir()) == 0);
+        d.undoStack()->undo();      // changed again after saving
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(copies(a.sessionDir()) == 1);
+        d.undoStack()->redo();      // back to the saved state
+        CHECK(copies(a.sessionDir()) == 0);
+        // Busy (mid-stroke): nothing is written until it's done.
+        bool busy = true;
+        a.setBusyCheck([&] { return busy; });
+        d.addLayer();
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(copies(a.sessionDir()) == 0);
+        busy = false;
+        a.saveNow();
+        a.waitForSaves();
+        CHECK(copies(a.sessionDir()) == 1);
+    }  // closing the document, then a normal exit, leaves nothing behind
+    CHECK(sessions() == 0);
+    {
+        // The timer saves on its own.
+        Autosave timed(root, 50);
+        Document d(QSize(20, 20), Qt::white);
+        timed.track(&d);
+        d.addLayer();
+        QTest::qWait(400);
+        timed.waitForSaves();
+        CHECK(copies(timed.sessionDir()) == 1);
+    }
+
+    // A real crash: a child process autosaves, then aborts while holding its lock.
+    {
+        QProcess child;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("PAIRPAINT_CRASH_ROOT", root);
+        child.setProcessEnvironment(env);
+        child.start(QCoreApplication::applicationFilePath(), {});
+        CHECK(child.waitForFinished(60000) && (child.exitStatus() == QProcess::CrashExit || child.exitCode() != 0));
+        Autosave after(root, 0);
+        const QList<Autosave::Recovered> left = after.findOrphans();
+        CHECK(left.size() == 1 && left.first().name == "crashed.pairpaint");
+        after.discardOrphans();
+        CHECK(sessions() == 1);  // only `after` itself
+    }
+
+    // A crash: the session's copies stay behind, unlocked.
+    QString untitledName;
+    {
+        Autosave crashed(root, 0);
+        Document photo(QSize(40, 30), Qt::white);
+        photo.setFilePath(tmpPath("photo.png"));
+        photo.addLayer(QStringLiteral("Painted"));
+        crashed.track(&photo);
+        Document untitled(QSize(20, 20), Qt::red);
+        untitled.addLayer();
+        untitledName = untitled.displayName();
+        crashed.track(&untitled);
+        crashed.saveNow();
+        crashed.waitForSaves();
+        crashed.abandon();
+    }
+    {  // and one whose copy is damaged
+        QDir().mkpath(root + "/old-session");
+        QFile junk(root + "/old-session/1.pairpaint"), info(root + "/old-session/1.json");
+        CHECK(junk.open(QIODevice::WriteOnly) && junk.write("PPNT garbage") > 0);
+        CHECK(info.open(QIODevice::WriteOnly) && info.write(R"({"name": "broken.psd", "saved": "2026-01-01T10:00:00"})") > 0);
+    }
+    // A session still running is never offered, even when its lock file is old.
+    Autosave running(root, 0);
+    Document busyDoc(QSize(20, 20), Qt::white);
+    busyDoc.addLayer();
+    running.track(&busyDoc);
+    running.saveNow();
+    running.waitForSaves();
+    QFile lock(running.sessionDir() + "/lock");
+    CHECK(lock.open(QIODevice::ReadWrite) && lock.setFileTime(QDateTime::currentDateTime().addDays(-1), QFileDevice::FileModificationTime));
+    lock.close();
+
+    Autosave next(root, 0);
+    const QList<Autosave::Recovered> found = next.findOrphans();
+    QStringList names;
+    for (const auto &r : found)
+        names << r.name;
+    CHECK(found.size() == 3 && names.first() == "broken.psd");  // oldest first
+    CHECK(names.contains("photo.png") && names.contains(untitledName));
+
+    auto *win = new MainWindow;
+    const QStringList failed = win->restoreRecovered(found);
+    CHECK(failed == QStringList{"broken.psd"});
+    Document *recovered = nullptr;
+    for (auto *c : win->findChildren<Canvas *>())
+        if (c->document()->filePath() == tmpPath("photo.png"))
+            recovered = c->document();
+    CHECK(recovered && recovered->isModified() && recovered->layerCount() == 2
+          && recovered->layer(1).name == "Painted");
+    next.discardOrphans();
+    CHECK(next.findOrphans().isEmpty());
+    CHECK(copies(running.sessionDir()) == 1);  // the running session's copy is untouched
+    for (auto *c : win->findChildren<Canvas *>())
+        c->document()->undoStack()->setClean();
+    delete win;
+}
+
 // The README screenshot: a small scene showing layers, a group, a mask, styles, an adjustment
 // layer and text. Run the tests with PAIRPAINT_SCREENSHOT=docs/screenshot.png to make it again.
 static void makeScreenshot(const QString &out)
@@ -1363,6 +1492,16 @@ int main(int argc, char **argv) {
       p.setColor(QPalette::Window, win); p.setColor(QPalette::WindowText, text); p.setColor(QPalette::Base, base);
       p.setColor(QPalette::Text, text); p.setColor(QPalette::Button, win); p.setColor(QPalette::ButtonText, text);
       p.setColor(QPalette::Highlight, QColor(42,130,218)); p.setColor(QPalette::HighlightedText, Qt::white); app.setPalette(p); }
+    if (qEnvironmentVariableIsSet("PAIRPAINT_CRASH_ROOT")) {  // child process of testAutosave
+        Autosave a(qEnvironmentVariable("PAIRPAINT_CRASH_ROOT"), 0);
+        auto *d = new Document(QSize(20, 20), Qt::white);
+        d->setFilePath(QDir::temp().filePath("crashed.pairpaint"));
+        d->addLayer();
+        a.track(d);
+        a.saveNow();
+        a.waitForSaves();
+        std::_Exit(3);  // no cleanup, like a real crash (abort() could open a crash dialog on Windows)
+    }
     if (qEnvironmentVariableIsSet("PAIRPAINT_SCREENSHOT")) {  // renders docs/screenshot.png for the README
         makeScreenshot(qEnvironmentVariable("PAIRPAINT_SCREENSHOT"));
         return 0;
@@ -1724,6 +1863,7 @@ int main(int argc, char **argv) {
     testHostileFiles();
     testPhotoFixes();
     testHeic();
+    testAutosave();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;
