@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.3 — 2026-10-09
 
 ### Fixed
 Found by a code review of 0.4 to 0.7.2:
