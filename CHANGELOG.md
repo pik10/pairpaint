@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Brush smoothing**: a Smoothing option for all brush tools steadies shaky strokes. The brush
+  follows the pointer on a string (shown while painting) and catches up when you let go.
+- **Rulers** (View > Rulers, Ctrl+R) along the top and left edge, showing where the pointer is.
+- **Guides**: drag them out of the rulers, or add one at an exact position with View > New Guide.
+  Move them with the Move tool, drop them back on a ruler to delete them, or Clear Guides. They
+  follow crops, resizes, rotations and flips, can be undone, and are saved in projects and PSD files.
+- **Snapping** (View > Snap): selections, shapes, crop, gradients and the Move tool snap to guides
+  and to the canvas edges and center, so centering something is easy. The line snapped to is
+  highlighted while you drag.
+
+### Changed
+- Project files are now version 8 (for guides).
+
 ## 0.6.0 — 2026-10-09
 
 ### New

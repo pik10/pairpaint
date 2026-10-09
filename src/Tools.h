@@ -48,6 +48,8 @@ public:
     virtual void paintOverlay(QPainter &, const QTransform &) {}  // image -> widget transform
     virtual QCursor cursor() const { return Qt::CrossCursor; }
     virtual bool showsBrushOutline() const { return false; }
+    // Whether the canvas snaps this tool's points to guides and the canvas edges and center.
+    virtual bool snapsToGuides() const { return false; }
     virtual void cancel() {}  // finish or abort any interaction in progress
 
     // Keyboard text entry (the Text tool while typing): while true, the canvas sends keys

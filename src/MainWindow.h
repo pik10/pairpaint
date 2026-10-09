@@ -42,7 +42,7 @@ protected:
 
 private:
     enum Option { OptSize, OptHardness, OptOpacity, OptTolerance, OptContiguous, OptSampleMerged,
-                  OptFill, OptAntialias, OptRadial, OptFont, OptPressure, OptRange, OptSponge, OptCropRatio, OptCount };
+                  OptFill, OptAntialias, OptRadial, OptFont, OptPressure, OptRange, OptSponge, OptCropRatio, OptSmoothing, OptCount };
 
     Canvas *canvas() const;
     Document *doc() const;

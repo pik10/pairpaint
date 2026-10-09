@@ -44,6 +44,16 @@ public:
     void updateCursor();
     void activateTool();  // lets the current tool set itself up for this document
 
+    // Rulers along the top and left edge (when shown), in logical pixels; 0 when hidden.
+    int rulerSize() const;
+    // Snapping to guides and the canvas edges and center, within a few screen pixels: the shift
+    // along x (`xAxis`) or y that puts the closest of `positions` on a line, or 0. The line is
+    // highlighted while a tool is pressed.
+    qreal snapOffset(bool xAxis, const QList<qreal> &positions);
+    QPointF snapPoint(const QPointF &p) { return p + QPointF(snapOffset(true, {p.x()}), snapOffset(false, {p.y()})); }
+    void clearSnapHighlight();
+    int guideAt(const QPointF &widgetPos) const;  // the guide under the pointer, or -1
+
 signals:
     void cursorMoved(const QPointF &imagePos);
     void zoomChanged(qreal zoom);
@@ -67,7 +77,11 @@ protected:
 
 private:
     Tool *tool() const;
-    ToolEvent toolEvent(QMouseEvent *e) const;
+    ToolEvent toolEvent(QMouseEvent *e);
+    void drawGuides(QPainter &p);
+    void drawRulers(QPainter &p);
+    void updateGuideDrag(const QPointF &widgetPos);
+    void updateHoverCursor(const QPointF &widgetPos);
     void onImageChanged(const QRect &r);
     void rebuildAnts();
     void drawAnts(QPainter &p);
@@ -87,6 +101,15 @@ private:
     QPointF m_cursorImage;
     bool m_cursorInside = false;
     qreal m_pressure = 1.0;
+
+    struct GuideDrag {
+        bool active = false;
+        int index = -1;  // the guide being moved, or -1 for a new one dragged from a ruler
+        Qt::Orientation orientation = Qt::Horizontal;
+        qreal pos = 0;
+    } m_guideDrag;
+    qreal m_snapX = qQNaN(), m_snapY = qQNaN();  // highlighted snap lines (image coordinates)
+    int m_hoverZone = -1;  // what the pointer is over, to change the cursor only when needed
 
     QList<QLineF> m_ants;  // selection outline in image coordinates
     QTimer m_antsTimer;

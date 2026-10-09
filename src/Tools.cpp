@@ -222,7 +222,7 @@ public:
             stroke(m_lastEnd, e.pos, true, e.pressure, e.pressure);
         else
             stroke(e.pos, e.pos, true, e.pressure, e.pressure);
-        m_last = e.pos;
+        m_last = m_raw = e.pos;
         m_lastPressure = e.pressure;
     }
 
@@ -231,21 +231,49 @@ public:
         m_hover = e.pos;
         if (!m_active)
             return;
-        stroke(m_last, e.pos, false, m_lastPressure, e.pressure);
-        m_last = e.pos;
+        m_raw = e.pos;
+        // Smoothing ("pulled string"): the brush follows the pointer on a string and only moves
+        // when the string is taut, so small wobbles of the hand don't reach the canvas.
+        const qreal string = stringLength();
+        QPointF to = e.pos;
+        if (string > 0) {
+            const QLineF pull(m_last, e.pos);
+            if (pull.length() <= string) {
+                m_canvas->update();  // the string moved
+                return;
+            }
+            to = pull.pointAt((pull.length() - string) / pull.length());
+            m_canvas->update();
+        }
+        stroke(m_last, to, false, m_lastPressure, e.pressure);
+        m_last = to;
         m_lastPressure = e.pressure;
     }
 
     void release(const ToolEvent &e) override
     {
-        if (e.button == Qt::LeftButton)
-            finish();
+        if (e.button != Qt::LeftButton)
+            return;
+        if (m_active && stringLength() > 0 && m_last != m_raw) {  // catch up: end where the pointer is
+            stroke(m_last, m_raw, false, m_lastPressure, e.pressure);
+            m_last = m_raw;
+        }
+        finish();
     }
 
     void cancel() override { finish(); }
 
     void paintOverlay(QPainter &p, const QTransform &t) override
     {
+        if (m_active && stringLength() > 0 && m_raw != m_last) {  // the smoothing string
+            const QPointF a = t.map(m_last), b = t.map(m_raw);
+            p.setPen(QPen(QColor(0, 0, 0, 140), 3, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(a, b);
+            p.setPen(QPen(QColor(255, 120, 200), 1.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(a, b);
+            p.setBrush(QColor(255, 120, 200));
+            p.drawEllipse(b, 2.5, 2.5);
+        }
         if ((m_mode != Clone && m_mode != Heal) || !m_hasSource)
             return;
         const QPointF src = m_offsetSet ? (m_active ? m_last : m_hover) + QPointF(m_offset) : QPointF(m_sourcePoint);
@@ -263,6 +291,15 @@ public:
     }
 
 private:
+    // The smoothing string in image pixels: up to 60 screen pixels at 100% smoothing, so it
+    // feels the same at any zoom.
+    qreal stringLength() const
+    {
+        if (m_settings->smoothing <= 0 || !m_canvas)
+            return 0;
+        return m_settings->smoothing / 100.0 * 60.0 / std::max<qreal>(0.01, m_canvas->zoom());
+    }
+
     void finish()
     {
         if (!m_active)
@@ -585,6 +622,7 @@ private:
     int m_smudgeSize = 0;
     QRect m_strokeRect;
     QPointF m_last, m_lastEnd, m_hover;
+    QPointF m_raw;  // the pointer; m_last trails it by the smoothing string
     qreal m_lastPressure = 1.0;
     const Document *m_lastDoc = nullptr;
     qreal m_residual = 0;
@@ -599,6 +637,7 @@ class ShapeTool : public Tool {
 public:
     ShapeTool(ToolSettings *s, Id id) : Tool(s), m_id(id) {}
     Id id() const override { return m_id; }
+    bool snapsToGuides() const override { return true; }
 
     void press(const ToolEvent &e) override
     {
@@ -660,6 +699,7 @@ class GradientTool : public Tool {
 public:
     using Tool::Tool;
     Id id() const override { return Gradient; }
+    bool snapsToGuides() const override { return true; }
 
     void press(const ToolEvent &e) override
     {
@@ -724,6 +764,7 @@ class SelectTool : public Tool {
 public:
     SelectTool(ToolSettings *s, Id id) : Tool(s), m_id(id) {}
     Id id() const override { return m_id; }
+    bool snapsToGuides() const override { return m_id != Lasso; }  // rectangles and ellipses
 
     void press(const ToolEvent &e) override
     {
@@ -800,6 +841,7 @@ class PolygonLassoTool : public Tool {
 public:
     using Tool::Tool;
     Id id() const override { return PolyLasso; }
+    bool snapsToGuides() const override { return true; }
 
     void press(const ToolEvent &e) override
     {
@@ -1068,8 +1110,18 @@ public:
         if (!m_drag)
             return;
         QPointF d = e.pos - m_start;
+        bool moveX = true, moveY = true;
         if (e.modifiers & Qt::ShiftModifier) {
-            if (std::abs(d.x()) > std::abs(d.y())) d.setY(0); else d.setX(0);
+            if (std::abs(d.x()) > std::abs(d.y())) { d.setY(0); moveY = false; } else { d.setX(0); moveX = false; }
+        }
+        // The content's edges and center snap to guides and to the canvas edges and center.
+        m_canvas->clearSnapHighlight();
+        if (!m_bounds.isEmpty()) {
+            const QRectF b = QRectF(m_bounds).translated(d);
+            if (moveX)
+                d.rx() += m_canvas->snapOffset(true, {b.left(), b.center().x(), b.right()});
+            if (moveY)
+                d.ry() += m_canvas->snapOffset(false, {b.top(), b.center().y(), b.bottom()});
         }
         const QPoint di(qRound(d.x()), qRound(d.y()));
         if (di != m_delta)
@@ -1115,13 +1167,22 @@ private:
         m_moved = false;
         m_delta = QPoint();
         m_groupMembers.clear();
+        m_bounds = QRect();
         if (m_doc->activeLayer().isGroup() && !m_doc->editingMask()) {
             // Moving a group moves every layer inside it.
             const int header = m_doc->activeIndex();
-            for (int i = m_doc->groupEndFor(header) + 1; i < header; ++i)
-                if (m_doc->layer(i).kind == LayerKind::Normal)
+            for (int i = m_doc->groupEndFor(header) + 1; i < header; ++i) {
+                if (m_doc->layer(i).kind == LayerKind::Normal) {
                     m_groupMembers << i;
+                    m_bounds |= alphaBounds(m_doc->layer(i).image);
+                }
+            }
             return;
+        }
+        if (!m_doc->editingMask()) {  // what is being moved, for snapping
+            m_bounds = alphaBounds(m_doc->targetImage());
+            if (m_doc->hasSelection())
+                m_bounds &= m_doc->selectionBounds();
         }
         // Moving part of a text layer turns it into pixels; moving all of it keeps it editable.
         if (m_doc->hasSelection()) {
@@ -1179,6 +1240,7 @@ private:
     DocState m_before;
     FloatingPixels m_pixels;
     QList<int> m_groupMembers;  // layers moved together when a group is active
+    QRect m_bounds;  // the content being moved, for snapping
 };
 
 // ---------------------------------------------------------------------------
@@ -1401,6 +1463,7 @@ class CropTool : public Tool {
 public:
     using Tool::Tool;
     Id id() const override { return Crop; }
+    bool snapsToGuides() const override { return true; }
 
     void press(const ToolEvent &e) override
     {

@@ -128,6 +128,160 @@ static void testSelections()
 
 
 // Dodge, Burn and Smudge, driven through the canvas like a user would.
+// Brush smoothing: a shaky stroke comes out steadier, and still ends where the pointer stopped.
+static void testSmoothing(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    w.addDocument(new Document(QSize(400, 200), Qt::white));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->setZoom(1.0, QPointF(c->width() / 2.0, c->height() / 2.0));
+    tools->setCurrent(Tool::Brush);
+    settings->size = 4;
+    settings->hardness = 100;
+    settings->opacity = 100;
+    settings->setForeground(Qt::black);
+    // A hand that wobbles 8 px up and down while moving right.
+    auto shaky = [&] {
+        QPointF last;
+        for (int k = 0; k <= 80; ++k) {
+            last = c->mapFromImage(QPointF(40 + 4 * k, 100 + (k % 2 ? 8 : -8)));
+            mouse(c, k == 0 ? QEvent::MouseButtonPress : QEvent::MouseMove, last, k == 0 ? Qt::LeftButton : Qt::NoButton,
+                  Qt::LeftButton);
+        }
+        mouse(c, QEvent::MouseButtonRelease, last, Qt::LeftButton, Qt::NoButton);
+    };
+    // How tall the painted line is in the middle of the stroke.
+    auto spread = [&] {
+        int top = 200, bottom = -1;
+        for (int y = 0; y < 200; ++y)
+            for (int x = 120; x < 280; ++x)
+                if (d->layer(0).image.pixelColor(x, y).red() < 128) {
+                    top = std::min(top, y);
+                    bottom = std::max(bottom, y);
+                }
+        return bottom - top;
+    };
+    settings->smoothing = 0;
+    shaky();
+    const int rough = spread();
+    d->undoStack()->undo();
+    settings->smoothing = 50;
+    shaky();
+    const int smooth = spread();
+    std::printf("     smoothing: line height %d px without, %d px with\n", rough, smooth);
+    CHECK(rough >= 18 && smooth <= rough / 3);
+    CHECK(d->layer(0).image.pixelColor(360, 92).red() < 128);  // caught up with the end point (k = 80)
+    CHECK(d->layer(0).image.pixelColor(40, 100).red() < 128 || d->layer(0).image.pixelColor(40, 92).red() < 128);
+    settings->smoothing = 0;
+    d->undoStack()->setClean();
+}
+
+// Guides: undoable, kept through image changes and files; rulers to drag them out of; snapping.
+static void testGuides(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    auto has = [](const Document &d, Qt::Orientation o, qreal pos) {
+        for (const Guide &g : d.guides())
+            if (g.orientation == o && std::abs(g.pos - pos) < 1e-6)
+                return true;
+        return false;
+    };
+    {
+        Document d(QSize(200, 100), Qt::white);
+        d.addGuide({Qt::Horizontal, 25});
+        d.addGuide({Qt::Vertical, 50});
+        CHECK(d.guides().size() == 2);
+        d.undoStack()->undo();
+        CHECK(d.guides().size() == 1);
+        d.undoStack()->redo();
+        d.moveGuide(1, 60);
+        CHECK(has(d, Qt::Vertical, 60));
+        d.undoStack()->undo();
+        CHECK(has(d, Qt::Vertical, 50));
+        d.rotate(90);  // clockwise: a horizontal guide at y becomes vertical at x = height - y
+        CHECK(d.size() == QSize(100, 200) && has(d, Qt::Vertical, 75) && has(d, Qt::Horizontal, 50));
+        d.undoStack()->undo();
+        d.flip(Qt::Horizontal);
+        CHECK(has(d, Qt::Vertical, 150) && has(d, Qt::Horizontal, 25));
+        d.undoStack()->undo();
+        d.crop(QRect(10, 10, 100, 50));
+        CHECK(has(d, Qt::Horizontal, 15) && has(d, Qt::Vertical, 40));
+        d.undoStack()->undo();
+        d.crop(QRect(60, 0, 100, 100));  // the vertical guide at 50 is cut off
+        CHECK(d.guides().size() == 1 && has(d, Qt::Horizontal, 25));
+        d.undoStack()->undo();
+        d.resizeImage(QSize(400, 200));
+        CHECK(has(d, Qt::Horizontal, 50) && has(d, Qt::Vertical, 100));
+        d.undoStack()->undo();
+        d.resizeCanvas(QSize(300, 100), QPoint(50, 0));
+        CHECK(has(d, Qt::Vertical, 100) && has(d, Qt::Horizontal, 25));
+        d.undoStack()->undo();
+        d.removeGuide(0);
+        CHECK(d.guides().size() == 1);
+        d.clearGuides();
+        CHECK(d.guides().isEmpty());
+        d.undoStack()->undo();
+        CHECK(d.guides().size() == 1);
+
+        // Saved in projects and Photoshop files (in 1/32 pixel there).
+        d.addGuide({Qt::Horizontal, 12.5});
+        QString err, warn;
+        CHECK(FileIO::saveProject(&d, tmpPath("guides.pairpaint"), &err) && Psd::write(&d, tmpPath("guides.psd"), &err, &warn));
+        for (const char *file : {"guides.pairpaint", "guides.psd"}) {
+            Document *back = FileIO::load(tmpPath(file), &err, &warn);
+            CHECK(back && back->guides().size() == 2 && has(*back, Qt::Vertical, 50) && has(*back, Qt::Horizontal, 12.5));
+            delete back;
+        }
+    }
+
+    // Rulers: drag a guide out of the top ruler, move it with the Move tool, drop it back to delete it.
+    settings->showRulers = true;
+    w.addDocument(new Document(QSize(400, 300), Qt::white));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->setZoom(1.0, QPointF(c->width() / 2.0, c->height() / 2.0));
+    QTest::qWait(20);
+    CHECK(c->rulerSize() == 20 && c->grab().toImage().pixelColor(c->width() / 2, 5) == QColor(48, 48, 48));
+    const QPointF ruler(c->mapFromImage(QPointF(200, 0)).x(), 10);
+    auto dragWidget = [&](QPointF a, QPointF b) {
+        mouse(c, QEvent::MouseButtonPress, a, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 10; ++i)
+            mouse(c, QEvent::MouseMove, a + (b - a) * i / 10.0, Qt::NoButton, Qt::LeftButton);
+        mouse(c, QEvent::MouseButtonRelease, b, Qt::LeftButton, Qt::NoButton);
+    };
+    dragWidget(ruler, c->mapFromImage(QPointF(200, 100.3)));
+    CHECK(d->guides().size() == 1 && has(*d, Qt::Horizontal, 100));  // on a pixel edge
+    tools->setCurrent(Tool::Move);
+    dragWidget(c->mapFromImage(QPointF(300, 100)), c->mapFromImage(QPointF(300, 150)));
+    CHECK(d->guides().size() == 1 && has(*d, Qt::Horizontal, 150));
+    CHECK(d->layer(0).image.pixelColor(10, 10) == QColor(Qt::white));  // the layer didn't move
+    dragWidget(c->mapFromImage(QPointF(300, 150)), QPointF(c->width() / 2.0, 8));
+    CHECK(d->guides().isEmpty());
+    d->undoStack()->undo();  // brings it back
+    CHECK(has(*d, Qt::Horizontal, 150));
+
+    // Snapping: a marquee started 5 px from the guide starts on it.
+    tools->setCurrent(Tool::RectSelect);
+    drag(c, {40, 145}, {120, 220});
+    CHECK(d->hasSelection() && d->selectionBounds().top() == 150);
+    settings->snap = false;
+    d->selectAll();
+    drag(c, {40, 145}, {120, 220});
+    CHECK(d->selectionBounds().top() == 145);
+    settings->snap = true;
+    d->deselect();
+    // The Move tool snaps the content's center to the canvas center (200, 150).
+    d->addLayer();
+    {
+        QPainter p(&d->activeLayer().image);
+        p.fillRect(QRect(20, 20, 40, 40), Qt::red);  // center (40, 40)
+    }
+    tools->setCurrent(Tool::Move);
+    drag(c, {40, 40}, {197, 146});  // 3 and 4 px short of the center
+    CHECK(d->activeLayer().image.pixelColor(180, 130) == QColor(Qt::red) && alphaBounds(d->activeLayer().image) == QRect(180, 130, 40, 40));
+    settings->showRulers = false;
+    d->undoStack()->setClean();
+}
+
 static void testRetouchTools(MainWindow &w, ToolManager *tools, ToolSettings *settings)
 {
     QImage img(200, 100, QImage::Format_ARGB32_Premultiplied);
@@ -1855,6 +2009,8 @@ int main(int argc, char **argv) {
 
     testSelections();
     testRetouchTools(w, tools, settings);
+    testSmoothing(w, tools, settings);
+    testGuides(w, tools, settings);
     testLayerStyles();
     testGroups(w, tools, settings);
     testBlendingAndClipping();

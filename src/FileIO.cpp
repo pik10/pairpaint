@@ -24,9 +24,9 @@
 namespace {
 
 constexpr quint32 kMagic = 0x50504E54;  // "PPNT"
-constexpr quint32 kVersion = 7;  // 2: masks, adjustments, text; 3: styles; 4: groups; 5: clipping, fill;
+constexpr quint32 kVersion = 8;  // 2: masks, adjustments, text; 3: styles; 4: groups; 5: clipping, fill;
                                   // 6: fonts stored as description strings; 7: Vibrance, Exposure,
-                                  // Color Balance and White Balance adjustments
+                                  // Color Balance and White Balance adjustments; 8: guides
 const QString kProjectSuffix = QStringLiteral("pairpaint");
 
 QString projectFilterEntry() { return QObject::tr("PairPaint Project (*.pairpaint)"); }
@@ -250,6 +250,17 @@ Document *loadProject(const QString &path, QString *error)
             sanitizeLayer(l);
             s.layers.append(l);
         }
+        if (version >= 8) {
+            const qint32 guideCount = r.read<qint32>();
+            if (guideCount < 0 || guideCount > 10000)
+                throw QObject::tr("The file is damaged (invalid guides).");
+            for (qint32 k = 0; k < guideCount; ++k) {
+                const qint8 horizontal = r.read<qint8>();
+                const double pos = r.read<double>();
+                if (std::isfinite(pos) && std::abs(pos) <= 1e6)
+                    s.guides.append({horizontal ? Qt::Horizontal : Qt::Vertical, pos});
+            }
+        }
         s.active = active;
         return new Document(s);
     } catch (const QString &message) {
@@ -421,6 +432,9 @@ bool saveProjectState(const DocState &s, const QString &path, QString *error)
         out << qint32(l.kind) << l.collapsed;
         out << l.clipped << double(l.fillOpacity);
     }
+    out << qint32(s.guides.size());
+    for (const Guide &g : s.guides)
+        out << qint8(g.orientation == Qt::Horizontal) << double(g.pos);
     if (out.status() != QDataStream::Ok || !f.commit()) {
         *error = f.errorString();
         return false;

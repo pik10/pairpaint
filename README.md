@@ -49,6 +49,10 @@ You can also [build from source](#building).
   Brush, Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)
+- **Brush smoothing**: steadies shaky strokes (all brush tools), like a string the brush follows
+- **Rulers, guides and snapping**: drag guides out of the rulers, move them with the Move tool or drop
+  them back to delete; selections, shapes, crop, gradients and moved content snap to guides and to the
+  canvas edges and center. Guides are saved in projects and PSD files
 - **Selections**: pixel masks with anti-aliasing, add / subtract / intersect, invert, marching ants;
   Feather, Expand, Contract, Border, Smooth, Color Range and Load Layer Transparency;
   every paint tool and filter respects the selection; Move and Free Transform act on selected pixels
@@ -105,7 +109,7 @@ cmake --build build -j
 | | | | Toggle editing mask / layer | Ctrl+\\ |
 | Paint Bucket / Gradient | K / G | | Hue/Sat, Invert, Desaturate | Ctrl+U, Ctrl+I, Ctrl+Shift+U |
 | Line / Rect / Ellipse | N / U / Shift+U | | Export | Ctrl+Shift+E |
-| Text / Hand / Zoom | T / H / Z | | | |
+| Text / Hand / Zoom | T / H / Z | | Rulers / guides / snap | Ctrl+R / Ctrl+; / Ctrl+Shift+; |
 
 Selection modifiers: Shift adds, Alt or Ctrl subtracts, Shift+Alt intersects.
 Clone Stamp / Healing Brush: Alt-click (or Ctrl-click) sets the source point.

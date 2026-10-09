@@ -13,6 +13,7 @@
 #include <QtMath>
 #include <QUndoCommand>
 #include <algorithm>
+#include <optional>
 
 namespace {
 
@@ -499,6 +500,7 @@ void Document::setState(const DocState &state)
     emit structureChanged();
     emit imageChanged(rect());
     emit selectionChanged();
+    emit guidesChanged();
 }
 
 void Document::commit(const QString &text, const DocState &before, int mergeId)
@@ -1257,6 +1259,67 @@ void Document::setMaskEnabled(bool enabled)
 // ---------------------------------------------------------------------------
 // Whole image
 
+// ---------------------------------------------------------------------------
+// Guides
+
+void Document::addGuide(const Guide &g)
+{
+    if (!std::isfinite(g.pos))
+        return;
+    const DocState before = m_state;
+    m_state.guides.append(g);
+    finish(tr("New Guide"), before, 0);
+    emit guidesChanged();
+}
+
+void Document::moveGuide(int i, qreal pos)
+{
+    if (i < 0 || i >= m_state.guides.size() || !std::isfinite(pos) || m_state.guides[i].pos == pos)
+        return;
+    const DocState before = m_state;
+    m_state.guides[i].pos = pos;
+    finish(tr("Move Guide"), before, 0);
+    emit guidesChanged();
+}
+
+void Document::removeGuide(int i)
+{
+    if (i < 0 || i >= m_state.guides.size())
+        return;
+    const DocState before = m_state;
+    m_state.guides.removeAt(i);
+    finish(tr("Delete Guide"), before, 0);
+    emit guidesChanged();
+}
+
+void Document::clearGuides()
+{
+    if (m_state.guides.isEmpty())
+        return;
+    const DocState before = m_state;
+    m_state.guides.clear();
+    finish(tr("Clear Guides"), before, 0);
+    emit guidesChanged();
+}
+
+namespace {
+
+// Guides follow the image when it is resized, cropped, rotated or flipped. `map` returns the
+// new guide, or nothing to drop it; guides left outside the image are dropped too.
+void mapGuides(DocState &s, const std::function<std::optional<Guide>(const Guide &)> &map)
+{
+    QList<Guide> out;
+    for (const Guide &g : std::as_const(s.guides)) {
+        const std::optional<Guide> n = map(g);
+        const qreal limit = n && n->orientation == Qt::Horizontal ? s.size.height() : s.size.width();
+        if (n && n->pos >= 0 && n->pos <= limit)
+            out.append(*n);
+    }
+    s.guides = out;
+}
+
+} // namespace
+
 void Document::resizeImage(const QSize &s)
 {
     if (s == size() || s.isEmpty())
@@ -1270,6 +1333,11 @@ void Document::resizeImage(const QSize &s)
     }
     m_state.size = s;
     m_state.selection = QImage();
+    mapGuides(m_state, [&](Guide g) -> std::optional<Guide> {
+        g.pos *= g.orientation == Qt::Horizontal ? qreal(s.height()) / before.size.height()
+                                                 : qreal(s.width()) / before.size.width();
+        return g;
+    });
     finish(tr("Image Size"), before);
 }
 
@@ -1293,6 +1361,10 @@ void Document::resizeCanvas(const QSize &s, const QPoint &offset)
     }
     m_state.size = s;
     m_state.selection = QImage();
+    mapGuides(m_state, [&](Guide g) -> std::optional<Guide> {
+        g.pos += g.orientation == Qt::Horizontal ? offset.y() : offset.x();
+        return g;
+    });
     finish(tr("Canvas Size"), before);
 }
 
@@ -1309,6 +1381,18 @@ void Document::rotate(int degrees)
     }
     m_state.size = m_state.layers.first().image.size();
     m_state.selection = QImage();
+    const qreal w = before.size.width(), h = before.size.height();
+    const int turn = ((degrees % 360) + 360) % 360;
+    mapGuides(m_state, [&](Guide g) -> std::optional<Guide> {
+        const bool horizontal = g.orientation == Qt::Horizontal;
+        if (turn == 180)
+            return Guide{g.orientation, (horizontal ? h : w) - g.pos};
+        if (turn == 90)  // clockwise: (x, y) becomes (h - y, x)
+            return horizontal ? Guide{Qt::Vertical, h - g.pos} : Guide{Qt::Horizontal, g.pos};
+        if (turn == 270)  // counterclockwise: (x, y) becomes (y, w - x)
+            return horizontal ? Guide{Qt::Vertical, g.pos} : Guide{Qt::Horizontal, w - g.pos};
+        return std::nullopt;
+    });
     finish(tr("Rotate Canvas"), before);
 }
 
@@ -1323,6 +1407,14 @@ void Document::flip(Qt::Orientation o)
     }
     if (hasSelection())
         m_state.selection = flipImage(m_state.selection, o);
+    mapGuides(m_state, [&](Guide g) -> std::optional<Guide> {
+        // Flipping horizontally mirrors x, so it moves the vertical guides.
+        if (o == Qt::Horizontal && g.orientation == Qt::Vertical)
+            g.pos = size().width() - g.pos;
+        else if (o == Qt::Vertical && g.orientation == Qt::Horizontal)
+            g.pos = size().height() - g.pos;
+        return g;
+    });
     finish(o == Qt::Horizontal ? tr("Flip Horizontal") : tr("Flip Vertical"), before);
 }
 
@@ -1341,6 +1433,10 @@ void Document::crop(const QRect &r)
     if (hasSelection())
         m_state.selection = m_state.selection.copy(c);
     m_state.size = c.size();
+    mapGuides(m_state, [&](Guide g) -> std::optional<Guide> {
+        g.pos -= g.orientation == Qt::Horizontal ? c.top() : c.left();
+        return g;
+    });
     finish(tr("Crop"), before);
 }
 
@@ -1375,6 +1471,7 @@ void Document::cropRotated(const QPointF &center, const QSize &s, qreal angle)
     }
     m_state.size = s;
     m_state.selection = QImage();
+    m_state.guides.clear();  // they'd be at an angle
     finish(tr("Crop"), before);
 }
 

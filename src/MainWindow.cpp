@@ -19,11 +19,14 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QCloseEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontComboBox>
+#include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -59,21 +62,21 @@ QList<int> optionsForTool(int id)
     using T = Tool;
     // Same order as MainWindow::Option.
     enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range,
-           Sponge, CropRatio };
+           Sponge, CropRatio, Smoothing };
     switch (id) {
     case T::Brush:
-    case T::Eraser: return {Size, Hardness, Opacity, Pressure};
+    case T::Eraser: return {Size, Hardness, Opacity, Smoothing, Pressure};
     case T::CloneStamp:
-    case T::Healing: return {Size, Hardness, Opacity, SampleMerged, Pressure};
+    case T::Healing: return {Size, Hardness, Opacity, Smoothing, SampleMerged, Pressure};
     case T::Smudge:
     case T::Blur:
-    case T::Sharpen: return {Size, Hardness, Opacity, Pressure};
-    case T::SpotHealing: return {Size, Hardness, Pressure};
-    case T::Sponge: return {Size, Hardness, Sponge, Opacity, Pressure};
+    case T::Sharpen: return {Size, Hardness, Opacity, Smoothing, Pressure};
+    case T::SpotHealing: return {Size, Hardness, Smoothing, Pressure};
+    case T::Sponge: return {Size, Hardness, Sponge, Opacity, Smoothing, Pressure};
     case T::Crop: return {CropRatio};
     case T::PolyLasso: return {Antialias};
     case T::Dodge:
-    case T::Burn: return {Size, Hardness, Range, Opacity, Pressure};
+    case T::Burn: return {Size, Hardness, Range, Opacity, Smoothing, Pressure};
     case T::Fill: return {Tolerance, Contiguous, SampleMerged, Opacity};
     case T::MagicWand: return {Tolerance, Contiguous, SampleMerged};
     case T::Gradient: return {Opacity, Radial};
@@ -450,6 +453,57 @@ void MainWindow::createMenus()
     addAction(view, tr("&Fit on Screen"), QKeySequence("Ctrl+0"), [this] { if (canvas()) canvas()->fitToWindow(); });
     addAction(view, tr("&Actual Pixels"), QKeySequence("Ctrl+1"), [this] { if (canvas()) canvas()->actualPixels(); });
     view->addSeparator();
+    // Rulers, guides and snapping: remembered between sessions, shared by all documents.
+    QSettings settings;
+    m_settings->showRulers = settings.value("view/rulers", false).toBool();
+    m_settings->showGuides = settings.value("view/guides", true).toBool();
+    m_settings->snap = settings.value("view/snap", true).toBool();
+    auto toggle = [&](const QString &text, const QKeySequence &key, bool *value, const QString &settingsKey) {
+        QAction *a = view->addAction(text);
+        a->setShortcut(key);
+        a->setCheckable(true);
+        a->setChecked(*value);
+        connect(a, &QAction::toggled, this, [this, value, settingsKey](bool on) {
+            *value = on;
+            QSettings().setValue(settingsKey, on);
+            for (auto *c : findChildren<Canvas *>())
+                c->update();
+        });
+        return a;
+    };
+    toggle(tr("&Rulers"), QKeySequence("Ctrl+R"), &m_settings->showRulers, "view/rulers");
+    QAction *showGuides = toggle(tr("Show &Guides"), QKeySequence("Ctrl+;"), &m_settings->showGuides, "view/guides");
+    toggle(tr("&Snap"), QKeySequence("Ctrl+Shift+;"), &m_settings->snap, "view/snap");
+    addAction(view, tr("&New Guide…"), {}, [this, showGuides] {
+        Document *d = doc();
+        if (!d)
+            return;
+        QDialog dlg(this);
+        dlg.setWindowTitle(tr("New Guide"));
+        auto *form = new QFormLayout(&dlg);
+        auto *orientation = new QComboBox;
+        orientation->addItems({tr("Horizontal"), tr("Vertical")});
+        auto *position = new QSpinBox;
+        position->setRange(-100000, 100000);
+        position->setSuffix(tr(" px"));
+        auto center = [&] {
+            position->setValue(orientation->currentIndex() == 0 ? d->size().height() / 2 : d->size().width() / 2);
+        };
+        connect(orientation, &QComboBox::currentIndexChanged, &dlg, center);
+        center();
+        form->addRow(tr("Orientation:"), orientation);
+        form->addRow(tr("Position:"), position);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        form->addRow(buttons);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        showGuides->setChecked(true);  // so the new guide can be seen
+        d->addGuide({orientation->currentIndex() == 0 ? Qt::Horizontal : Qt::Vertical, qreal(position->value())});
+    });
+    addAction(view, tr("&Clear Guides"), {}, [this] { withDoc([](Document *d) { d->clearGuides(); }); });
+    view->addSeparator();
     QMenu *uiSize = view->addMenu(tr("&Interface Size"));
     auto *sizeGroup = new QActionGroup(this);
     const double current = QSettings().value("ui/scale", 1.0).toDouble();
@@ -575,6 +629,10 @@ void MainWindow::createOptionsBar()
     spin(OptHardness, tr("Hardness:"), 0, 100, s->hardness, QStringLiteral("%"), [s](int v) { s->hardness = v; });
     spin(OptOpacity, tr("Opacity:"), 1, 100, s->opacity, QStringLiteral("%"), [s](int v) { s->opacity = v; });
     m_opacityLabel = bar->widgetForAction(m_optionActions[OptOpacity])->findChild<QLabel *>();
+    QSpinBox *smoothing = spin(OptSmoothing, tr("Smoothing:"), 0, 100, s->smoothing, QStringLiteral("%"),
+                               [s](int v) { s->smoothing = v; });
+    smoothing->setToolTip(tr("Steadies brush strokes: the brush follows the pointer on a string, so small "
+                             "wobbles don't show. Higher values are smoother but trail further behind."));
     spin(OptTolerance, tr("Tolerance:"), 0, 255, s->tolerance, {}, [s](int v) { s->tolerance = v; });
     check(OptContiguous, tr("Contiguous"), s->contiguous, [s](bool v) { s->contiguous = v; });
     check(OptSampleMerged, tr("Sample all layers"), s->sampleMerged, [s](bool v) { s->sampleMerged = v; });

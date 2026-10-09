@@ -70,7 +70,9 @@ Canvas::Canvas(Document *doc, ToolManager *tools, QWidget *parent)
         fitToWindow(false);
     });
     connect(doc, &Document::selectionChanged, this, &Canvas::rebuildAnts);
+    connect(doc, &Document::guidesChanged, this, qOverload<>(&Canvas::update));
     connect(tools, &ToolManager::toolChanged, this, [this] {
+        m_hoverZone = -1;
         updateCursor();
         update();
     });
@@ -138,11 +140,13 @@ void Canvas::fitToWindow(bool allowEnlarge)
     const QSize s = m_doc->size();
     if (width() <= 0 || height() <= 0 || s.isEmpty())
         return;
-    qreal z = std::min((width() - 40.0) / s.width(), (height() - 40.0) / s.height()) * devicePixelRatioF();
+    const int r = rulerSize();
+    const qreal w = width() - r, h = height() - r;
+    qreal z = std::min((w - 40.0) / s.width(), (h - 40.0) / s.height()) * devicePixelRatioF();
     if (!allowEnlarge)
         z = std::min<qreal>(z, 1.0);
     m_zoom = std::clamp(z, kMinZoom, kMaxZoom);
-    m_offset = QPointF((width() - s.width() * scale()) / 2.0, (height() - s.height() * scale()) / 2.0);
+    m_offset = QPointF(r + (w - s.width() * scale()) / 2.0, r + (h - s.height() * scale()) / 2.0);
     emit zoomChanged(m_zoom);
     update();
 }
@@ -151,7 +155,9 @@ void Canvas::actualPixels()
 {
     m_zoom = 1.0;
     const QSize s = m_doc->size();
-    m_offset = QPointF(std::round((width() - s.width() * scale()) / 2.0), std::round((height() - s.height() * scale()) / 2.0));
+    const int r = rulerSize();
+    m_offset = QPointF(r + std::round((width() - r - s.width() * scale()) / 2.0),
+                       r + std::round((height() - r - s.height() * scale()) / 2.0));
     emit zoomChanged(m_zoom);
     update();
 }
@@ -212,6 +218,7 @@ void Canvas::paintEvent(QPaintEvent *)
     p.drawRect(imgRect.adjusted(-0.5, -0.5, 0.5, 0.5));
 
     drawAnts(p);
+    drawGuides(p);
 
     Tool *t = tool();
     p.save();
@@ -228,6 +235,201 @@ void Canvas::paintEvent(QPaintEvent *)
         p.setPen(QPen(QColor(255, 255, 255, 220), 1));
         p.drawEllipse(c, r, r);
     }
+    drawRulers(p);
+}
+
+// ---------------------------------------------------------------------------
+// Rulers, guides and snapping
+
+int Canvas::rulerSize() const { return m_tools->settings()->showRulers ? 20 : 0; }
+
+void Canvas::drawGuides(QPainter &p)
+{
+    const bool show = m_tools->settings()->showGuides;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    auto line = [&](Qt::Orientation o, qreal pos, const QColor &color) {
+        p.setPen(QPen(color, 1));
+        if (o == Qt::Horizontal) {
+            const qreal y = std::floor(mapFromImage(QPointF(0, pos)).y()) + 0.5;
+            p.drawLine(QPointF(0, y), QPointF(width(), y));
+        } else {
+            const qreal x = std::floor(mapFromImage(QPointF(pos, 0)).x()) + 0.5;
+            p.drawLine(QPointF(x, 0), QPointF(x, height()));
+        }
+    };
+    const QColor guide(0, 210, 255);
+    if (show) {
+        const QList<Guide> &guides = m_doc->guides();
+        for (int i = 0; i < guides.size(); ++i)
+            if (!(m_guideDrag.active && m_guideDrag.index == i))
+                line(guides[i].orientation, guides[i].pos, guide);
+    }
+    if (m_guideDrag.active)
+        line(m_guideDrag.orientation, m_guideDrag.pos, guide);
+    // What the tool snapped to, while it is pressed.
+    if (m_toolPressed) {
+        const QColor snap(255, 60, 200);
+        if (!qIsNaN(m_snapX))
+            line(Qt::Vertical, m_snapX, snap);
+        if (!qIsNaN(m_snapY))
+            line(Qt::Horizontal, m_snapY, snap);
+    }
+    p.restore();
+}
+
+void Canvas::drawRulers(QPainter &p)
+{
+    const int r = rulerSize();
+    if (r == 0)
+        return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    QFont f = font();
+    f.setPixelSize(9);
+    p.setFont(f);
+    const QColor background(48, 48, 48), ink(170, 170, 170), border(25, 25, 25);
+    p.fillRect(QRect(0, 0, width(), r), background);
+    p.fillRect(QRect(0, 0, r, height()), background);
+
+    // Numbered ticks at the smallest "round" step (1, 2 or 5 times a power of ten image pixels)
+    // that is at least 50 screen pixels apart, with smaller ticks in between.
+    const qreal s = scale();
+    qreal step = 0;
+    for (qreal base = 1; step == 0 && base < 1e9; base *= 10)
+        for (qreal n : {1.0, 2.0, 5.0})
+            if (step == 0 && n * base * s >= 50)
+                step = n * base;
+    if (step == 0)
+        step = 1e9;
+    const int minorCount = step * s / 10 >= 5 ? 10 : step * s / 5 >= 5 ? 5 : step * s / 2 >= 5 ? 2 : 1;
+    auto axis = [&](bool horizontal) {
+        const qreal origin = horizontal ? m_offset.x() : m_offset.y();
+        const qreal length = horizontal ? width() : height();
+        const qint64 first = qint64(std::floor((r - origin) / s / step));
+        const qint64 last = qint64(std::ceil((length - origin) / s / step));
+        p.setPen(ink);
+        for (qint64 k = first; k <= last; ++k) {
+            const qreal v = k * step;
+            const qreal at = std::floor(origin + v * s) + 0.5;
+            for (int m = 1; m < minorCount; ++m) {
+                const qreal mat = std::floor(origin + (v + step * m / minorCount) * s) + 0.5;
+                const qreal tick = (minorCount == 10 && m == 5) ? r * 0.45 : r * 0.7;
+                if (mat > r)
+                    horizontal ? p.drawLine(QPointF(mat, tick), QPointF(mat, r)) : p.drawLine(QPointF(tick, mat), QPointF(r, mat));
+            }
+            if (at <= r)
+                continue;
+            const QString label = QString::number(v, 'g', 10);
+            if (horizontal) {
+                p.drawLine(QPointF(at, 0), QPointF(at, r));
+                p.drawText(QPointF(at + 3, 10), label);
+            } else {
+                p.drawLine(QPointF(0, at), QPointF(r, at));
+                p.save();
+                p.translate(11, at + 3);
+                p.rotate(-90);
+                p.drawText(QPointF(-p.fontMetrics().horizontalAdvance(label), 0), label);
+                p.restore();
+            }
+        }
+    };
+    axis(true);
+    axis(false);
+    // Where the pointer is.
+    if (m_cursorInside) {
+        const QPointF c = mapFromImage(m_cursorImage);
+        p.setPen(QColor(255, 255, 255, 200));
+        if (c.x() > r)
+            p.drawLine(QPointF(std::floor(c.x()) + 0.5, 0), QPointF(std::floor(c.x()) + 0.5, r));
+        if (c.y() > r)
+            p.drawLine(QPointF(0, std::floor(c.y()) + 0.5), QPointF(r, std::floor(c.y()) + 0.5));
+    }
+    p.setPen(border);
+    p.drawLine(QPointF(r - 0.5, r - 0.5), QPointF(width(), r - 0.5));
+    p.drawLine(QPointF(r - 0.5, r - 0.5), QPointF(r - 0.5, height()));
+    p.fillRect(QRect(0, 0, r - 1, r - 1), background);
+    p.restore();
+}
+
+int Canvas::guideAt(const QPointF &w) const
+{
+    if (!m_tools->settings()->showGuides)
+        return -1;
+    const QList<Guide> &guides = m_doc->guides();
+    for (int i = int(guides.size()) - 1; i >= 0; --i) {  // the newest on top
+        const QPointF at = mapFromImage(QPointF(guides[i].pos, guides[i].pos));
+        const qreal d = guides[i].orientation == Qt::Horizontal ? std::abs(at.y() - w.y()) : std::abs(at.x() - w.x());
+        if (d <= 4)
+            return i;
+    }
+    return -1;
+}
+
+qreal Canvas::snapOffset(bool xAxis, const QList<qreal> &positions)
+{
+    qreal &highlight = xAxis ? m_snapX : m_snapY;
+    highlight = qQNaN();
+    const ToolSettings *settings = m_tools->settings();
+    if (!settings->snap || positions.isEmpty())
+        return 0;
+    const qreal extent = xAxis ? m_doc->size().width() : m_doc->size().height();
+    QList<qreal> targets{0, extent / 2, extent};  // the edges and the center
+    if (settings->showGuides)
+        for (const Guide &g : m_doc->guides())
+            if ((g.orientation == Qt::Vertical) == xAxis)
+                targets << g.pos;
+    qreal best = 8 / scale();  // 8 screen pixels
+    qreal shift = 0;
+    for (qreal p : positions) {
+        for (qreal t : std::as_const(targets)) {
+            if (std::abs(t - p) < std::abs(best)) {
+                best = t - p;
+                shift = t - p;
+                highlight = t;
+            }
+        }
+    }
+    return shift;
+}
+
+void Canvas::clearSnapHighlight()
+{
+    m_snapX = m_snapY = qQNaN();
+}
+
+void Canvas::updateGuideDrag(const QPointF &w)
+{
+    const QPointF img = mapToImage(w);
+    m_guideDrag.pos = std::round(m_guideDrag.orientation == Qt::Horizontal ? img.y() : img.x());  // on pixel edges
+    update();
+}
+
+// Arrow over the rulers, a resize cursor over guides the Move tool can drag, else the tool's.
+void Canvas::updateHoverCursor(const QPointF &w)
+{
+    if (m_spaceDown || m_panning || m_toolPressed)
+        return;
+    const int r = rulerSize();
+    int zone = 0;
+    if (r > 0 && (w.x() < r || w.y() < r)) {
+        zone = 1;
+    } else if (m_tools->currentId() == Tool::Move) {
+        const int g = guideAt(w);
+        if (g >= 0)
+            zone = m_doc->guides().at(g).orientation == Qt::Horizontal ? 2 : 3;
+    }
+    if (zone == m_hoverZone)
+        return;
+    m_hoverZone = zone;
+    if (zone == 1)
+        setCursor(Qt::ArrowCursor);
+    else if (zone == 2)
+        setCursor(Qt::SplitVCursor);
+    else if (zone == 3)
+        setCursor(Qt::SplitHCursor);
+    else
+        updateCursor();
 }
 
 void Canvas::rebuildAnts()
@@ -301,11 +503,13 @@ void Canvas::drawAnts(QPainter &p)
 // ---------------------------------------------------------------------------
 // Input
 
-ToolEvent Canvas::toolEvent(QMouseEvent *e) const
+ToolEvent Canvas::toolEvent(QMouseEvent *e)
 {
     ToolEvent t;
     t.widgetPos = e->position();
     t.pos = mapToImage(e->position());
+    if (tool()->snapsToGuides())
+        t.pos = snapPoint(t.pos);
     t.button = e->button();
     t.buttons = e->buttons();
     t.modifiers = e->modifiers();
@@ -328,6 +532,25 @@ void Canvas::mousePressEvent(QMouseEvent *e)
     }
     if (m_toolPressed && (e->buttons() & ~e->button()))
         return;  // ignore a second button while a tool drag is in progress
+    if (e->button() == Qt::LeftButton && !m_toolPressed) {
+        const QPointF w = e->position();
+        const int r = rulerSize();
+        if (r > 0 && (w.x() < r || w.y() < r)) {  // dragging a new guide out of a ruler
+            if (w.x() >= r || w.y() >= r) {
+                m_guideDrag = {true, -1, w.y() < r ? Qt::Horizontal : Qt::Vertical, 0};
+                updateGuideDrag(w);
+            }
+            return;
+        }
+        if (m_tools->currentId() == Tool::Move) {  // the Move tool also moves guides
+            const int g = guideAt(w);
+            if (g >= 0) {
+                const Guide &guide = m_doc->guides().at(g);
+                m_guideDrag = {true, g, guide.orientation, guide.pos};
+                return;
+            }
+        }
+    }
     if (e->button() == Qt::LeftButton && Tool::editsPixels(m_tools->currentId()) && !m_doc->canEditPixels()) {
         QToolTip::showText(e->globalPosition().toPoint(),
                            tr("A group is selected. Select a layer inside it to paint, or add a mask to the group."));
@@ -349,6 +572,11 @@ void Canvas::mouseMoveEvent(QMouseEvent *e)
         m_panLast = e->position();
         return;
     }
+    if (m_guideDrag.active) {
+        updateGuideDrag(e->position());
+        return;
+    }
+    updateHoverCursor(e->position());
     tool()->move(toolEvent(e));
     update();
 }
@@ -360,9 +588,27 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e)
         updateCursor();
         return;
     }
+    if (m_guideDrag.active && e->button() == Qt::LeftButton) {
+        // Dropped on the canvas: placed. Dropped back on a ruler or outside: removed.
+        m_guideDrag.active = false;
+        const int r = rulerSize();
+        const bool onCanvas = QRectF(rect()).adjusted(r, r, 0, 0).contains(e->position());
+        const GuideDrag d = m_guideDrag;
+        if (d.index < 0 && onCanvas)
+            m_doc->addGuide({d.orientation, d.pos});
+        else if (d.index >= 0 && onCanvas)
+            m_doc->moveGuide(d.index, d.pos);
+        else if (d.index >= 0)
+            m_doc->removeGuide(d.index);
+        m_hoverZone = -1;
+        updateHoverCursor(e->position());
+        update();
+        return;
+    }
     if (m_toolPressed && e->buttons() == Qt::NoButton) {
         m_toolPressed = false;
         tool()->release(toolEvent(e));
+        clearSnapHighlight();
         update();
     }
 }

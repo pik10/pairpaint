@@ -18,6 +18,7 @@ public:
     int size = 20;          // brush / stroke width in pixels
     int hardness = 100;     // 0..100
     int opacity = 100;      // 0..100
+    int smoothing = 0;      // 0..100: how much brush strokes are steadied
     int tolerance = 32;     // 0..255
     bool contiguous = true;
     bool sampleMerged = false;
@@ -29,6 +30,10 @@ public:
     double cropRatio = 0;          // Crop: width / height, 0 = free, -1 = the image's own ratio
     bool pressureSize = true;      // pen pressure controls brush size
     bool pressureOpacity = false;  // pen pressure controls brush opacity
+    // View options, shared by every canvas.
+    bool showRulers = false;
+    bool showGuides = true;
+    bool snap = true;              // to guides and the canvas edges and center
     QFont font{QStringLiteral("Sans Serif")};
 
     QColor foreground() const { return m_fg; }

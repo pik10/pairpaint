@@ -83,6 +83,13 @@ struct Layer {
     bool isText() const { return text.isValid(); }
 };
 
+// A guide line for aligning things; not part of the image.
+struct Guide {
+    Qt::Orientation orientation;  // Qt::Horizontal: a horizontal line at y = pos; Qt::Vertical: at x = pos
+    qreal pos;
+    bool operator==(const Guide &o) const { return orientation == o.orientation && pos == o.pos; }
+};
+
 // Everything that takes part in undo/redo. QImage is implicitly shared, so a
 // copy of DocState is cheap: only layers that are modified later get detached.
 struct DocState {
@@ -90,6 +97,7 @@ struct DocState {
     QList<Layer> layers;  // index 0 is the bottom layer
     int active = 0;
     QImage selection;     // Format_Alpha8 mask; null when nothing is selected
+    QList<Guide> guides;
 };
 
 enum class SelectionOp { Replace, Add, Subtract, Intersect };
@@ -205,6 +213,12 @@ public:
     void rotate(int degrees);
     void flip(Qt::Orientation orientation);
     void crop(const QRect &r);
+
+    const QList<Guide> &guides() const { return m_state.guides; }
+    void addGuide(const Guide &g);
+    void moveGuide(int i, qreal pos);
+    void removeGuide(int i);
+    void clearGuides();
     // Crops to a frame of `size` centered at `center`, rotated by `angle` degrees (straightening).
     void cropRotated(const QPointF &center, const QSize &size, qreal angle);
 
@@ -232,6 +246,7 @@ signals:
     void selectionChanged();
     void sizeChanged();
     void titleChanged();
+    void guidesChanged();
 
 private:
     enum Change { Pixels = 1, Structure = 2, Selection = 4, All = 7 };

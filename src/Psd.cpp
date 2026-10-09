@@ -776,6 +776,7 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
 
     r.skip(r.u32());  // color mode data
     int globalAngle = 120;  // Photoshop's default lighting angle for effects
+    QList<Guide> guides;
     {
         const quint32 len = r.u32();
         const qint64 end = r.pos() + len;
@@ -789,6 +790,16 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
             const qint64 next = r.pos() + size + (size % 2);
             if (id == 1037 && size >= 4)  // global light angle
                 globalAngle = r.i32();
+            if (id == 1032 && size >= 16) {  // grid and guides
+                r.u32();   // version
+                r.skip(8);  // grid spacing
+                const quint32 count = std::min<quint32>(r.u32(), std::min<quint32>((size - 16) / 5, 10000));
+                for (quint32 k = 0; k < count; ++k) {
+                    const qint32 location = r.i32();  // in 1/32 pixel
+                    const bool horizontal = r.u8() == 1;
+                    guides.append({horizontal ? Qt::Horizontal : Qt::Vertical, location / 32.0});
+                }
+            }
             r.seek(next);
         }
         r.seek(end);
@@ -963,6 +974,7 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
         state.layers.append(l);
     }
     state.active = int(state.layers.size()) - 1;
+    state.guides = guides;
     return new Document(state);
 }
 
@@ -1222,7 +1234,21 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
     out.writeRawData("\0\0\0\0\0\0", 6);
     out << quint16(3) << quint32(h) << quint32(w) << quint16(8) << quint16(3);
     out << quint32(0);  // color mode data
-    out << quint32(0);  // image resources
+    // Image resources: the guides (resource 1032), positions in 1/32 pixel.
+    const QList<Guide> &guides = doc->guides();
+    if (guides.isEmpty()) {
+        out << quint32(0);
+    } else {
+        const quint32 size = 16 + 5 * quint32(guides.size());
+        out << quint32(12 + size + size % 2);
+        out.writeRawData("8BIM", 4);
+        out << quint16(1032) << quint16(0);  // id, empty name (padded to two bytes)
+        out << size << quint32(1) << quint32(576) << quint32(576) << quint32(guides.size());
+        for (const Guide &g : guides)
+            out << qint32(std::lround(std::clamp(g.pos, -1e6, 1e6) * 32)) << quint8(g.orientation == Qt::Horizontal);
+        if (size % 2)
+            out << quint8(0);
+    }
     out << quint32(4 + layerInfo.size() + 4);
     out << quint32(layerInfo.size());
     out.writeRawData(layerInfo.constData(), int(layerInfo.size()));
