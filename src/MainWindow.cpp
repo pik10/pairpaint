@@ -247,7 +247,9 @@ void MainWindow::createMenus()
         {Adjustment::Curves, QKeySequence("Ctrl+M")}, {Adjustment::HueSaturation, QKeySequence("Ctrl+U")},
         {Adjustment::Invert, QKeySequence("Ctrl+I")}, {Adjustment::Threshold, {}}, {Adjustment::Posterize, {}},
     };
-    for (const auto &[type, key] : adjustments) {
+    for (const auto &entry : adjustments) {
+        const Adjustment::Type type = entry.first;  // a named copy, so the lambda below can capture it
+        const QKeySequence key = entry.second;
         const QString suffix = type == Adjustment::Invert ? QString() : QStringLiteral("…");
         addAction(adjust, Adjustments::name(type) + suffix, key, [this, type] { runAdjustment(type); });
     }
