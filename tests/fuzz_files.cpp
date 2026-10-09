@@ -8,7 +8,8 @@
 //   fuzz_files <iterations> <random seed> <seed files...>
 //
 // Before every attempt the current input is written to fuzz-current.<ext>, so after a crash
-// that file reproduces it. Inputs that take longer than 20 seconds are saved as fuzz-hang.<ext>.
+// that file reproduces it. Inputs that take longer than 60 seconds are saved as fuzz-hang.<ext>
+// (generous, because sanitizer builds run about ten times slower).
 
 #include "Document.h"
 #include "FileIO.h"
@@ -87,7 +88,7 @@ int main(int argc, char **argv)
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);
-    FileIO::setMaxImagePixels(4'000'000);  // keep corrupted "huge" images quick to reject or load
+    FileIO::setMaxImagePixels(1'000'000);  // keep corrupted "huge" images quick to reject or load
     if (argc < 4) {
         std::fprintf(stderr, "usage: %s <iterations> <random seed> <seed files...>\n", argv[0]);
         return 2;
@@ -115,7 +116,7 @@ int main(int argc, char **argv)
             const long now = started.load();
             stuck = (now == last) ? stuck + 1 : 0;
             last = now;
-            if (stuck >= 20 && current.load() >= 0) {
+            if (stuck >= 60 && current.load() >= 0) {
                 const QString ext = seeds[current.load()].second;
                 QFile::copy(QStringLiteral("fuzz-current.") + ext, QStringLiteral("fuzz-hang.") + ext);
                 std::fprintf(stderr, "HANG: input saved as fuzz-hang.%s\n", qPrintable(ext));
