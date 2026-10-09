@@ -951,27 +951,20 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
     m_tools->current()->cancel();
     Document *d = c->document();
     QString path = d->filePath();
-    bool layered = d->layerCount() > 1;
-    for (int i = 0; i < d->layerCount(); ++i)
-        layered |= !d->layer(i).mask.isNull() || d->layer(i).isAdjustment() || d->layer(i).isText();
-
-    // Saving layers to a flat format would lose them, so default to the
-    // project format in that case.
-    if (saveAs || path.isEmpty() || (layered && !FileIO::isLayeredFormat(path))) {
-        QString suggested = path.isEmpty()
-            ? QDir(QSettings().value("lastDir", QDir::homePath()).toString()).filePath(d->displayName())
-            : path;
-        if ((layered && !FileIO::isLayeredFormat(suggested)) || path.isEmpty())
-            suggested = QFileInfo(suggested).path() + QLatin1Char('/') + QFileInfo(suggested).completeBaseName() + QStringLiteral(".pairpaint");
+    // Save keeps everything, so it writes only the layered formats; images opened from a JPEG
+    // or PNG are saved as a project (or PSD), and flat copies are made with Export.
+    if (saveAs || !FileIO::isLayeredFormat(path)) {
         QString selectedFilter;
-        path = QFileDialog::getSaveFileName(this, tr("Save As"), suggested, FileIO::saveFilter(), &selectedFilter);
+        path = QFileDialog::getSaveFileName(this, tr("Save As"), suggestedSavePath(d), FileIO::saveFilter(),
+                                            &selectedFilter);
         if (path.isEmpty())
             return false;
-        if (QFileInfo(path).suffix().isEmpty()) {
-            const int star = selectedFilter.indexOf(QStringLiteral("*."));
-            const QString ext = star >= 0 ? selectedFilter.mid(star + 2).section(QRegularExpression("[ )]"), 0, 0)
-                                          : QStringLiteral("pairpaint");
-            path += QLatin1Char('.') + ext;
+        if (!FileIO::isLayeredFormat(path)) {  // e.g. typed "photo.png": use the chosen layered format
+            const QString ext = selectedFilter.contains(QStringLiteral("*.psd")) ? QStringLiteral("psd")
+                                                                               : QStringLiteral("pairpaint");
+            const QFileInfo fi(path);
+            const QString name = FileIO::isFlatImageFile(path) ? fi.completeBaseName() : fi.fileName();
+            path = fi.path() + QLatin1Char('/') + name + QLatin1Char('.') + ext;
         }
     }
 
@@ -999,13 +992,14 @@ void MainWindow::exportDocument()
     if (!d)
         return;
     m_tools->current()->cancel();
-    const QString base = d->filePath().isEmpty()
-        ? QDir(QSettings().value("lastDir", QDir::homePath()).toString()).filePath(d->displayName())
-        : d->filePath();
+    const QString suggested = suggestedExportPath(d);
+    // Start with the file type of the suggestion selected (e.g. JPEG for a photo opened as JPEG).
     QString selectedFilter;
-    QString path = QFileDialog::getSaveFileName(this, tr("Export As"),
-                                                QFileInfo(base).path() + QLatin1Char('/') + QFileInfo(base).completeBaseName() + QStringLiteral(".png"),
-                                                FileIO::exportFilter(), &selectedFilter);
+    const QString suffix = QStringLiteral("*.") + QFileInfo(suggested).suffix().toLower();
+    for (const QString &f : FileIO::exportFilter().split(QStringLiteral(";;")))
+        if (f.contains(suffix + QLatin1Char(' ')) || f.contains(suffix + QLatin1Char(')')))
+            selectedFilter = f;
+    QString path = QFileDialog::getSaveFileName(this, tr("Export As"), suggested, FileIO::exportFilter(), &selectedFilter);
     if (path.isEmpty())
         return;
     if (QFileInfo(path).suffix().isEmpty())
@@ -1020,10 +1014,49 @@ void MainWindow::exportDocument()
         QSettings().setValue("exportQuality", quality);
     }
     QString error;
-    if (!FileIO::exportImage(d, path, &error, quality))
+    if (!exportTo(d, path, quality, &error))
         QMessageBox::critical(this, tr("Export"), tr("Could not export:\n%1").arg(error));
     else
         statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3000);
+}
+
+bool MainWindow::hasLayeredContent(const Document *d)
+{
+    bool layered = d->layerCount() > 1;
+    for (int i = 0; i < d->layerCount(); ++i)
+        layered |= !d->layer(i).mask.isNull() || d->layer(i).isAdjustment() || d->layer(i).isText();
+    return layered;
+}
+
+QString MainWindow::suggestedSavePath(const Document *d) const
+{
+    const QString base = d->filePath().isEmpty()
+        ? QDir(QSettings().value("lastDir", QDir::homePath()).toString()).filePath(d->displayName())
+        : d->filePath();
+    if (FileIO::isLayeredFormat(base))
+        return base;
+    const QFileInfo fi(base);  // e.g. photo.jpg or photo.heic becomes photo.pairpaint
+    return fi.path() + QLatin1Char('/') + fi.completeBaseName() + QStringLiteral(".pairpaint");
+}
+
+QString MainWindow::suggestedExportPath(const Document *d) const
+{
+    if (FileIO::isFlatImageFile(d->filePath()))
+        return d->filePath();  // back to the image it came from (the dialog asks before replacing it)
+    const QString base = d->filePath().isEmpty()
+        ? QDir(QSettings().value("lastDir", QDir::homePath()).toString()).filePath(d->displayName())
+        : d->filePath();
+    const QFileInfo fi(base);  // e.g. photo.pairpaint or photo.heic becomes photo.png
+    return fi.path() + QLatin1Char('/') + fi.completeBaseName() + QStringLiteral(".png");
+}
+
+bool MainWindow::exportTo(Document *d, const QString &path, int quality, QString *error)
+{
+    if (!FileIO::exportImage(d, path, error, quality))
+        return false;
+    if (!d->filePath().isEmpty() && QFileInfo(path) == QFileInfo(d->filePath()) && !hasLayeredContent(d))
+        d->undoStack()->setClean();  // the file it came from now has the changes: nothing is unsaved
+    return true;
 }
 
 bool MainWindow::maybeSave(int tab)

@@ -1361,6 +1361,42 @@ static void testPhotoFixes()
     }
 }
 
+// Save writes only layered files (.pairpaint, .psd); flat images are exported. Exporting a
+// simple edit back over the image it came from counts as saving it.
+static void testSaveAndExport(MainWindow &w)
+{
+    const QString save = FileIO::saveFilter();
+    CHECK(save.contains("*.pairpaint") && save.contains("*.psd") && !save.contains("*.png") && !save.contains("*.jpg"));
+    CHECK(FileIO::exportFilter().contains("*.png") && FileIO::exportFilter().contains("*.jpg"));
+    CHECK(FileIO::isFlatImageFile("a.JPG") && !FileIO::isFlatImageFile("a.pairpaint") && !FileIO::isFlatImageFile("a.psd"));
+
+    QString err;
+    // A photo opened from a JPEG.
+    Document photo(QSize(40, 30), QColor(120, 90, 60));
+    photo.setFilePath(tmpPath("photo.jpg"));
+    CHECK(w.suggestedSavePath(&photo) == tmpPath("photo.pairpaint"));
+    CHECK(w.suggestedExportPath(&photo) == tmpPath("photo.jpg"));
+    // A quick fix (one layer) exported back over it: nothing left unsaved.
+    photo.applyToActive("Invert", [](const QImage &img) { return Filters::invert(img); });
+    CHECK(photo.isModified() && !MainWindow::hasLayeredContent(&photo));
+    CHECK(w.exportTo(&photo, tmpPath("copy.png"), 0, &err) && photo.isModified());  // a copy elsewhere: still unsaved
+    CHECK(w.exportTo(&photo, tmpPath("photo.jpg"), 90, &err) && !photo.isModified() && QFile::exists(tmpPath("photo.jpg")));
+    // With layers, the JPEG can't hold everything: still unsaved.
+    photo.addLayer();
+    CHECK(MainWindow::hasLayeredContent(&photo));
+    CHECK(w.exportTo(&photo, tmpPath("photo.jpg"), 90, &err) && photo.isModified());
+    // A project exports next to itself as PNG; a new image uses its name.
+    Document project(QSize(10, 10), Qt::white);
+    project.setFilePath(tmpPath("poster.pairpaint"));
+    CHECK(w.suggestedSavePath(&project) == tmpPath("poster.pairpaint") && w.suggestedExportPath(&project) == tmpPath("poster.png"));
+    Document heic(QSize(10, 10), Qt::white);
+    heic.setFilePath(tmpPath("IMG_0001.HEIC"));
+    CHECK(w.suggestedSavePath(&heic) == tmpPath("IMG_0001.pairpaint") && w.suggestedExportPath(&heic) == tmpPath("IMG_0001.png"));
+    Document untitled(QSize(10, 10), Qt::white);
+    CHECK(w.suggestedSavePath(&untitled).endsWith(untitled.displayName() + ".pairpaint")
+          && w.suggestedExportPath(&untitled).endsWith(untitled.displayName() + ".png"));
+}
+
 // HEIC photos (iPhone): opened upright, with Display P3 colors converted to sRGB.
 static void testHeic()
 {
@@ -2139,6 +2175,7 @@ int main(int argc, char **argv) {
     testHostileFiles();
     testPhotoFixes();
     testHeic();
+    testSaveAndExport(w);
     testAutosave();
     {
         // Regression: destroying a window with unsaved changes used to crash.

@@ -63,7 +63,8 @@ You can also [build from source](#building).
 - **Undo** (80 steps) with a History panel, multiple documents in tabs
 - **Autosave and crash recovery**: every 2 minutes, images with unsaved changes are copied in the
   background to a recovery folder; if PairPaint closes unexpectedly, it offers to reopen them next time
-- **Files**: native `.pairpaint` project format (keeps everything); **Photoshop PSD** import (RGB, grayscale,
+- **Files**: **Save** keeps your work as a `.pairpaint` project (keeps everything) or a PSD; **Export**
+  makes a flattened PNG, JPEG, WebP, … copy to share. **Photoshop PSD** import (RGB, grayscale,
   CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, vector masks, clipping masks, Fill, all blend modes,
   adjustment layers, fill and shape layers, drop shadow / outer glow / stroke effects) and layered export; open/export PNG, JPEG,
   WebP, BMP, TIFF, GIF, … (with a quality setting for JPEG and WebP); open **HEIC** photos from iPhones

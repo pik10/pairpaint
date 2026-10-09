@@ -32,6 +32,15 @@ public:
     Autosave *autosave() const { return m_autosave; }
     // After a crash: offers to reopen the documents that had unsaved changes.
     void offerRecovery();
+    // Whether a flat image file would lose something of the document: layers, masks, editable
+    // text or adjustment layers.
+    static bool hasLayeredContent(const Document *d);
+    // Where Save As and Export As start: a project, or an image, next to the document's file.
+    QString suggestedSavePath(const Document *d) const;
+    QString suggestedExportPath(const Document *d) const;
+    // Writes a flattened copy. Exporting back over the image the document was opened from, when
+    // nothing would be lost, counts as saving it (no "unsaved changes" question on closing).
+    bool exportTo(Document *d, const QString &path, int quality, QString *error);
     // Opens recovery copies as unsaved documents; returns the copies that couldn't be opened.
     QList<Autosave::Recovered> restoreRecovered(const QList<Autosave::Recovered> &copies);
 

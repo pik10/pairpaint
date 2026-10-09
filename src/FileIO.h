@@ -11,12 +11,13 @@ struct DocState;
 namespace FileIO {
 
 QString openFilter();
-QString saveFilter();    // project, PSD and flat image formats
+QString saveFilter();    // the layered formats: project and PSD (flat images are exported)
 QString exportFilter();  // flat image formats only
 
 bool isProjectFile(const QString &path);
 bool isPsdFile(const QString &path);
 bool isLayeredFormat(const QString &path);  // .pairpaint or .psd
+bool isFlatImageFile(const QString &path);  // a format Export writes: .png, .jpg, .webp, ...
 // Saves in the format given by the file extension (layered or flattened).
 bool save(const Document *doc, const QString &path, QString *error, QString *warning);
 // `warning` (optional) receives notes about content that couldn't be fully reproduced.

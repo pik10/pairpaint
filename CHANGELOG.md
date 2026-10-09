@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Save keeps your work, Export makes copies**: Save and Save As now write only the formats that
+  keep everything (`.pairpaint` projects and PSD). Flattened PNG, JPEG, WebP and other images are
+  made with File > Export As, so layers can't be lost by saving to the wrong format.
+- Export As starts with the image you opened (e.g. `photo.jpg`, in JPEG), so a quick fix is
+  Ctrl+Shift+E and Enter. Exporting a single-layer image back over its own file counts as saving
+  it, so closing doesn't ask about unsaved changes.
+
 ## 0.7.3 — 2026-10-09
 
 ### Fixed

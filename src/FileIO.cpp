@@ -312,8 +312,13 @@ QString openFilter()
 
 QString saveFilter()
 {
-    return projectFilterEntry() + QStringLiteral(";;") + QObject::tr("Photoshop (*.psd)") + QStringLiteral(";;")
-         + writableImageFilters();
+    return projectFilterEntry() + QStringLiteral(";;") + QObject::tr("Photoshop (*.psd)");
+}
+
+bool isFlatImageFile(const QString &path)
+{
+    const QByteArray suffix = QFileInfo(path).suffix().toLower().toLatin1();
+    return !suffix.isEmpty() && !isLayeredFormat(path) && QImageWriter::supportedImageFormats().contains(suffix);
 }
 
 QString exportFilter() { return writableImageFilters(); }
