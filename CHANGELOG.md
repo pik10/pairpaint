@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.1 — 2026-10-09
+
+### Fixed
+Opening damaged or malicious files is now safe. A fuzzing campaign (over 115,000 corrupted files,
+run with AddressSanitizer and UndefinedBehaviorSanitizer) found and fixed:
+- A PSD that could freeze PairPaint for minutes (a layer name claiming ~4 billion characters).
+- PSD layer bounds that overflowed, which could cause huge memory use.
+- Unknown or out-of-range values in project files (blend modes, opacity, effect and font sizes,
+  adjustment settings) that caused undefined behavior.
+- A corrupted project that made Qt try to reserve 48 GB and crash; running out of memory while
+  reading a file now reports it as damaged.
+
+### Other
+- Images over 250 megapixels are rejected with a clear message.
+- Every push is now also tested with sanitizers and a short fuzzing run.
+
 ## 0.3.0 — 2026-10-09
 
 ### New
