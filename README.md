@@ -2,7 +2,7 @@
 
 [![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
-A cross-platform, layered raster image editor, written in C++17 with Qt 6.
+A cross-platform, layered raster image editor, written in C++20 with Qt 6.
 Runs on Linux, Windows and macOS from the same source.
 
 ![PairPaint with a layered image: text with a drop shadow, a sun with an outer glow, a group of hills, a layer mask and a Vibrance adjustment layer](docs/screenshot.png)
@@ -72,7 +72,7 @@ You can also [build from source](#building).
 
 ## Building
 
-Requirements: CMake ≥ 3.19, a C++17 compiler and Qt ≥ 6.2 (Widgets, Concurrent). Optional on Linux:
+Requirements: CMake ≥ 3.19, a C++20 compiler and Qt ≥ 6.2 (Widgets, Concurrent). Optional on Linux:
 libheif with its HEVC decoder, to open HEIC photos (without it the build still works, with a warning).
 
 ```sh

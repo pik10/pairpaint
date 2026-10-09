@@ -18,12 +18,12 @@ jobs:
     # Build on an older Ubuntu: the AppImage then also runs on older distributions.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'  # long-term support release
+          version: '6.12.*'
           modules: qtimageformats  # WebP, TIFF and more
           cache: true
 
@@ -70,7 +70,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'  # the runner has no FUSE
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
           # Include Wayland support next to X11, so the app runs natively on both.
-          EXTRA_PLATFORM_PLUGINS: libqwayland-egl.so;libqwayland-generic.so
+          EXTRA_PLATFORM_PLUGINS: libqwayland.so
           EXTRA_QT_PLUGINS: wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration
         run: |
           export OUTPUT="PairPaint-${VERSION}-x86_64.AppImage"
@@ -87,7 +87,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: ./PairPaint-*.AppImage --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: PairPaint-Linux
           path: PairPaint-*.AppImage
@@ -95,12 +95,12 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: '6.12.*'
           modules: qtimageformats
           cache: true
 
@@ -151,7 +151,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem PairPaint-*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: PairPaint-Windows
           path: |
@@ -161,12 +161,12 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.10.*'  # Qt 6.8 links Apple's removed AGL framework
+          version: '6.12.*'
           modules: qtimageformats
           cache: true
 
@@ -203,7 +203,7 @@ jobs:
           ln -s /Applications dmg/Applications
           hdiutil create -volname PairPaint -srcfolder dmg -ov -format UDZO "PairPaint-${VERSION}-macos-universal.dmg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: PairPaint-macOS
           path: PairPaint-*.dmg
@@ -213,12 +213,12 @@ jobs:
     needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: downloads
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: downloads/*
           generate_release_notes: true

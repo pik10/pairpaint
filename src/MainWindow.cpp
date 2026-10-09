@@ -693,7 +693,7 @@ void MainWindow::createOptionsBar()
     fontSize->setSuffix(tr(" px"));
     auto *boldBox = m_bold = new QCheckBox(tr("Bold"));
     auto *italicBox = m_italic = new QCheckBox(tr("Italic"));
-    auto updateFont = [=] {
+    auto updateFont = [=, this] {
         QFont f = fontBox->currentFont();
         f.setPixelSize(fontSize->value());
         f.setBold(boldBox->isChecked());
