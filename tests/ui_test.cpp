@@ -28,6 +28,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainterPath>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QStyleFactory>
 #include <QTabWidget>
@@ -35,6 +36,7 @@
 #include <QTest>
 #include <QtMath>
 #include <QTreeWidget>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -1203,6 +1205,149 @@ static void testHeic()
     FileIO::setMaxImagePixels(250'000'000);
 }
 
+// The README screenshot: a small scene showing layers, a group, a mask, styles, an adjustment
+// layer and text. Run the tests with PAIRPAINT_SCREENSHOT=docs/screenshot.png to make it again.
+static void makeScreenshot(const QString &out)
+{
+    {  // the app's own theme (main.cpp)
+        QPalette p;
+        const QColor window(50, 50, 50), base(35, 35, 35), text(225, 225, 225), disabled(120, 120, 120);
+        p.setColor(QPalette::Window, window); p.setColor(QPalette::WindowText, text); p.setColor(QPalette::Base, base);
+        p.setColor(QPalette::AlternateBase, window); p.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+        p.setColor(QPalette::ToolTipText, text); p.setColor(QPalette::Text, text); p.setColor(QPalette::Button, window);
+        p.setColor(QPalette::ButtonText, text); p.setColor(QPalette::BrightText, Qt::red);
+        p.setColor(QPalette::Link, QColor(42, 130, 218)); p.setColor(QPalette::Highlight, QColor(42, 130, 218));
+        p.setColor(QPalette::HighlightedText, Qt::white); p.setColor(QPalette::PlaceholderText, QColor(150, 150, 150));
+        p.setColor(QPalette::Disabled, QPalette::Text, disabled); p.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
+        p.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+        QApplication::setPalette(p);
+    }
+    const QSize size(1200, 800);
+    auto blank = [&] { QImage i(size, QImage::Format_ARGB32_Premultiplied); i.fill(Qt::transparent); return i; };
+    auto layer = [&](const QString &name, const std::function<void(QPainter &)> &paint) {
+        Layer l;
+        l.name = name;
+        l.image = blank();
+        QPainter p(&l.image);
+        p.setRenderHint(QPainter::Antialiasing);
+        paint(p);
+        return l;
+    };
+    DocState s;
+    s.size = size;
+    s.layers << layer("Sky", [&](QPainter &p) {
+        QLinearGradient g(0, 0, 0, 640);
+        g.setColorAt(0, QColor(28, 36, 92));
+        g.setColorAt(0.45, QColor(156, 82, 140));
+        g.setColorAt(0.8, QColor(247, 150, 104));
+        g.setColorAt(1, QColor(255, 214, 140));
+        p.fillRect(QRect(QPoint(0, 0), size), g);
+        p.setPen(Qt::NoPen);
+        QRandomGenerator rng(7);
+        for (int k = 0; k < 90; ++k) {  // stars, fading toward the horizon
+            const QPointF c(rng.bounded(1200), rng.bounded(330));
+            p.setBrush(QColor(255, 255, 255, int(200 * (1 - c.y() / 360))));
+            p.drawEllipse(c, 1.3, 1.3);
+        }
+    });
+    Layer sun = layer("Sun", [&](QPainter &p) {
+        QRadialGradient g(QPointF(800, 520), 85);
+        g.setColorAt(0, QColor(255, 248, 214));
+        g.setColorAt(1, QColor(255, 214, 120));
+        p.setPen(Qt::NoPen);
+        p.setBrush(g);
+        p.drawEllipse(QPointF(800, 520), 85, 85);
+    });
+    sun.style.glow = true;
+    sun.style.glowColor = QColor(255, 200, 120);
+    sun.style.glowSize = 60;
+    sun.style.glowOpacity = 80;
+    s.layers << sun;
+    Layer end;
+    end.kind = LayerKind::GroupEnd;
+    end.image = blank();
+    s.layers << end;
+    auto hills = [](QPainter &p, double base, double amp, double phase, const QColor &c) {
+        QPainterPath path(QPointF(0, 800));
+        for (int x = 0; x <= 1200; x += 10)
+            path.lineTo(x, base - amp * (0.6 * std::sin(x / 170.0 + phase) + 0.4 * std::sin(x / 63.0 + 2 * phase)));
+        path.lineTo(1200, 800);
+        p.fillPath(path, c);
+    };
+    s.layers << layer("Far hills", [&](QPainter &p) { hills(p, 560, 55, 0.4, QColor(112, 64, 112)); });
+    Layer lake = layer("Lake", [&](QPainter &p) {
+        QLinearGradient g(0, 640, 0, 800);
+        g.setColorAt(0, QColor(250, 170, 120));
+        g.setColorAt(1, QColor(70, 50, 110));
+        p.fillRect(QRect(0, 640, 1200, 160), g);
+        p.setPen(QPen(QColor(255, 236, 190, 170), 3, Qt::SolidLine, Qt::RoundCap));
+        for (int k = 0; k < 7; ++k)  // the sun's reflection
+            p.drawLine(QPointF(800 - 70 + k * 9, 662 + k * 17), QPointF(800 + 70 - k * 9, 662 + k * 17));
+    });
+    lake.mask = blank();
+    {
+        QPainter mp(&lake.mask);
+        QLinearGradient g(0, 0, 1200, 0);
+        g.setColorAt(0, QColor(90, 90, 90));
+        g.setColorAt(0.5, Qt::white);
+        g.setColorAt(1, QColor(90, 90, 90));
+        mp.fillRect(lake.mask.rect(), g);
+    }
+    s.layers << lake;
+    s.layers << layer("Near hills", [&](QPainter &p) {
+        QPainterPath path(QPointF(0, 800));
+        path.lineTo(0, 600);
+        path.cubicTo(180, 560, 330, 610, 470, 660);
+        path.cubicTo(520, 700, 520, 800, 520, 800);
+        p.fillPath(path, QColor(46, 30, 62));
+        QPainterPath right(QPointF(1200, 800));
+        right.lineTo(1200, 590);
+        right.cubicTo(1080, 580, 990, 630, 940, 690);
+        right.cubicTo(910, 730, 900, 800, 900, 800);
+        p.fillPath(right, QColor(46, 30, 62));
+    });
+    Layer group;
+    group.kind = LayerKind::Group;
+    group.name = "Landscape";
+    group.mode = Blend::PassThrough;
+    group.image = blank();
+    s.layers << group;
+    Layer vib;
+    vib.name = "Vibrance";
+    vib.adjustment = {Adjustment::Vibrance, {35, 0}};
+    vib.image = blank();
+    vib.mask = blank();
+    vib.mask.fill(Qt::white);
+    s.layers << vib;
+    Layer title;
+    title.name = "Golden Hour";
+    title.text.text = "Golden Hour";
+    title.text.font = QFont("Serif");
+    title.text.font.setPixelSize(118);
+    title.text.font.setBold(true);
+    title.text.color = QColor(255, 244, 222);
+    title.text.pos = QPointF(140, 150);
+    title.image = renderText(title.text, size);
+    title.style.shadow = true;
+    title.style.shadowOpacity = 60;
+    title.style.shadowDistance = 6;
+    title.style.shadowSize = 14;
+    s.layers << title;
+    s.active = int(s.layers.size()) - 1;
+
+    MainWindow w;
+    w.resize(1440, 1000);
+    w.show();
+    auto *doc = new Document(s);
+    doc->setFilePath(QDir::temp().filePath("golden-hour.pairpaint"));
+    w.addDocument(doc);
+    QTest::qWait(300);
+    if (auto *c = w.findChild<Canvas *>())
+        c->fitToWindow();
+    QTest::qWait(300);
+    w.grab().save(out);
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -1218,6 +1363,10 @@ int main(int argc, char **argv) {
       p.setColor(QPalette::Window, win); p.setColor(QPalette::WindowText, text); p.setColor(QPalette::Base, base);
       p.setColor(QPalette::Text, text); p.setColor(QPalette::Button, win); p.setColor(QPalette::ButtonText, text);
       p.setColor(QPalette::Highlight, QColor(42,130,218)); p.setColor(QPalette::HighlightedText, Qt::white); app.setPalette(p); }
+    if (qEnvironmentVariableIsSet("PAIRPAINT_SCREENSHOT")) {  // renders docs/screenshot.png for the README
+        makeScreenshot(qEnvironmentVariable("PAIRPAINT_SCREENSHOT"));
+        return 0;
+    }
     MainWindow w; w.resize(1400, 900); w.show();
     QTest::qWait(50);
     auto *tools = w.findChild<ToolManager *>();

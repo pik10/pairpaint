@@ -24,6 +24,12 @@
       <li>Pen tablet pressure support</li>
     </ul>
   </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Editing a layered image with text, effects, a group and an adjustment layer</caption>
+      <image>https://raw.githubusercontent.com/pik10/pairpaint/main/docs/screenshot.png</image>
+    </screenshot>
+  </screenshots>
   <launchable type="desktop-id">io.github.pik10.PairPaint.desktop</launchable>
   <url type="homepage">https://github.com/pik10/pairpaint</url>
   <url type="bugtracker">https://github.com/pik10/pairpaint/issues</url>

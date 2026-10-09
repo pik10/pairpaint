@@ -5,6 +5,8 @@
 A cross-platform, layered raster image editor in the spirit of Photoshop, written in C++17 with Qt 6.
 Runs on Linux, Windows and macOS from the same source.
 
+![PairPaint with a layered image: text with a drop shadow, a sun with an outer glow, a group of hills, a layer mask and a Vibrance adjustment layer](docs/screenshot.png)
+
 ## Download
 
 Get the latest version from the [Releases page](../../releases/latest). See [CHANGELOG.md](CHANGELOG.md) for what's new.
