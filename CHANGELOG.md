@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Built with Qt 6.12, the current long-term support release, on all systems (the Windows and
+  Linux downloads used Qt 6.8, whose free updates have ended; macOS used 6.10). This brings Qt's
+  latest fixes, including security fixes in its image decoders.
+- The code now uses C++20.
+
 ## 0.7.1 — 2026-10-09
 
 ### Fixed
