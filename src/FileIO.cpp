@@ -367,6 +367,12 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
             *error = reader.errorString();
             return nullptr;
         }
+#ifdef Q_OS_MACOS
+        // Qt's macOS HEIF plugin already converts the pixels to sRGB but still labels them with
+        // the photo's own color space; converting again would oversaturate them.
+        if (reader.format() == "heic" || reader.format() == "heif")
+            img.setColorSpace(QColorSpace::SRgb);
+#endif
     }
     // PairPaint edits in sRGB. Photos with a wider color space (Display P3 from phones, Adobe RGB)
     // are converted, or their colors would look dull.

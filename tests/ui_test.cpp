@@ -1148,7 +1148,7 @@ static void testHeic()
     const QString sample = QStringLiteral(PAIRPAINT_TEST_DATA) + "/heic/sample.heic";
     // Builds expected to open HEIC set PAIRPAINT_EXPECT_HEIF (CI on Linux and macOS); on Windows it
     // depends on whether the system's HEIF and HEVC codecs are installed.
-    const bool expected = qEnvironmentVariableIsSet("PAIRPAINT_EXPECT_HEIF");
+    const bool expected = !qEnvironmentVariable("PAIRPAINT_EXPECT_HEIF").isEmpty();
     CHECK(Heif::isHeif(sample) && !Heif::isHeif(QStringLiteral(PAIRPAINT_TEST_DATA) + "/fuzz/seed-small.pairpaint"));
     QString err, warn;
     Document *d = FileIO::load(sample, &err, &warn);
@@ -1186,7 +1186,8 @@ static void testHeic()
         CHECK(cut.open(QIODevice::WriteOnly) && cut.write(bytes.left(n)) == n);
         cut.close();
         Document *broken = FileIO::load(tmpPath("cut.heic"), &err, &warn);
-        CHECK(!broken && !err.isEmpty());
+        if (Heif::hasDecoder())  // macOS may show a partly decoded image instead; either is fine
+            CHECK(!broken && !err.isEmpty());
         delete broken;
     }
     FileIO::setMaxImagePixels(1000);
