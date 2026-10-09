@@ -125,7 +125,7 @@ namespace Blend {
 bool isCustom(QPainter::CompositionMode mode)
 {
     // Qt's Plus also adds the alphas; Photoshop's Linear Dodge blends like the other modes.
-    return int(mode) >= 1000 || mode == QPainter::CompositionMode_Plus;
+    return int(mode) >= int(LinearBurn) || mode == QPainter::CompositionMode_Plus;
 }
 
 void draw(QImage &dst, const QImage &src, QPainter::CompositionMode mode, qreal opacity, const QPoint &origin)

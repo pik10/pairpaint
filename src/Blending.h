@@ -7,25 +7,26 @@
 #include <QPainter>
 
 // Blend modes that Qt's painter doesn't provide. They are stored in Layer::mode next to
-// QPainter's own modes, and PairPaint composites them itself.
+// QPainter's own modes, and PairPaint composites them itself. Their values (48-62) are
+// unused by Qt but inside the enum's valid range (Qt's highest mode is 37).
 namespace Blend {
 
-constexpr QPainter::CompositionMode LinearBurn = QPainter::CompositionMode(1000);
-constexpr QPainter::CompositionMode VividLight = QPainter::CompositionMode(1001);
-constexpr QPainter::CompositionMode LinearLight = QPainter::CompositionMode(1002);
-constexpr QPainter::CompositionMode PinLight = QPainter::CompositionMode(1003);
-constexpr QPainter::CompositionMode HardMix = QPainter::CompositionMode(1004);
-constexpr QPainter::CompositionMode Subtract = QPainter::CompositionMode(1005);
-constexpr QPainter::CompositionMode Divide = QPainter::CompositionMode(1006);
-constexpr QPainter::CompositionMode DarkerColor = QPainter::CompositionMode(1007);
-constexpr QPainter::CompositionMode LighterColor = QPainter::CompositionMode(1008);
-constexpr QPainter::CompositionMode Hue = QPainter::CompositionMode(1009);
-constexpr QPainter::CompositionMode Saturation = QPainter::CompositionMode(1010);
-constexpr QPainter::CompositionMode Color = QPainter::CompositionMode(1011);
-constexpr QPainter::CompositionMode Luminosity = QPainter::CompositionMode(1012);
-constexpr QPainter::CompositionMode Dissolve = QPainter::CompositionMode(1013);
+constexpr QPainter::CompositionMode LinearBurn = QPainter::CompositionMode(48);
+constexpr QPainter::CompositionMode VividLight = QPainter::CompositionMode(49);
+constexpr QPainter::CompositionMode LinearLight = QPainter::CompositionMode(50);
+constexpr QPainter::CompositionMode PinLight = QPainter::CompositionMode(51);
+constexpr QPainter::CompositionMode HardMix = QPainter::CompositionMode(52);
+constexpr QPainter::CompositionMode Subtract = QPainter::CompositionMode(53);
+constexpr QPainter::CompositionMode Divide = QPainter::CompositionMode(54);
+constexpr QPainter::CompositionMode DarkerColor = QPainter::CompositionMode(55);
+constexpr QPainter::CompositionMode LighterColor = QPainter::CompositionMode(56);
+constexpr QPainter::CompositionMode Hue = QPainter::CompositionMode(57);
+constexpr QPainter::CompositionMode Saturation = QPainter::CompositionMode(58);
+constexpr QPainter::CompositionMode Color = QPainter::CompositionMode(59);
+constexpr QPainter::CompositionMode Luminosity = QPainter::CompositionMode(60);
+constexpr QPainter::CompositionMode Dissolve = QPainter::CompositionMode(61);
 // Groups only: the group's layers blend directly with what is below the group.
-constexpr QPainter::CompositionMode PassThrough = QPainter::CompositionMode(1014);
+constexpr QPainter::CompositionMode PassThrough = QPainter::CompositionMode(62);
 
 // True for the modes PairPaint composites itself (its own modes, and Linear Dodge).
 bool isCustom(QPainter::CompositionMode mode);
