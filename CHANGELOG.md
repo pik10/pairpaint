@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1 — 2026-10-09
 
 ### Fixed
 - Filling a shape with the Paint Bucket left a thin light gap inside its outline. Rectangles and
