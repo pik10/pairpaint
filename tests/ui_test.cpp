@@ -1306,8 +1306,10 @@ static void testAutosave()
     running.saveNow();
     running.waitForSaves();
     QFile lock(running.sessionDir() + "/lock");
-    CHECK(lock.open(QIODevice::ReadWrite) && lock.setFileTime(QDateTime::currentDateTime().addDays(-1), QFileDevice::FileModificationTime));
-    lock.close();
+    if (lock.open(QIODevice::ReadWrite)) {  // Windows keeps a held lock file open exclusively
+        CHECK(lock.setFileTime(QDateTime::currentDateTime().addDays(-1), QFileDevice::FileModificationTime));
+        lock.close();
+    }
 
     Autosave next(root, 0);
     const QList<Autosave::Recovered> found = next.findOrphans();
