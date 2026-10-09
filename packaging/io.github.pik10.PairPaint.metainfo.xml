@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pik10.PairPaint</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>PairPaint</name>
+  <summary>Layered image editor for photos and painting</summary>
+  <developer id="io.github.pik10">
+    <name>Peter Gniewek</name>
+  </developer>
+  <description>
+    <p>
+      PairPaint is a free, cross-platform image editor with layers, masks, adjustment layers,
+      layer groups and layer styles. It was created through pair programming between a human
+      and an AI.
+    </p>
+    <ul>
+      <li>Layers with blend modes, masks, groups and non-destructive styles (shadow, glow, stroke)</li>
+      <li>Adjustment layers: Levels, Curves, Hue/Saturation, Brightness/Contrast and more</li>
+      <li>Brush, Clone Stamp, Healing Brush, Smudge, Dodge, Burn, gradients, shapes and text</li>
+      <li>Selections with feather, expand, contract and color range; free transform</li>
+      <li>Opens and saves layered Photoshop PSD files</li>
+      <li>Pen tablet pressure support</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.pik10.PairPaint.desktop</launchable>
+  <url type="homepage">https://github.com/pik10/pairpaint</url>
+  <url type="bugtracker">https://github.com/pik10/pairpaint/issues</url>
+  <url type="vcs-browser">https://github.com/pik10/pairpaint</url>
+  <categories>
+    <category>Graphics</category>
+    <category>RasterGraphics</category>
+  </categories>
+  <keywords>
+    <keyword>image</keyword>
+    <keyword>photo</keyword>
+    <keyword>editor</keyword>
+    <keyword>paint</keyword>
+    <keyword>layers</keyword>
+    <keyword>psd</keyword>
+  </keywords>
+  <provides>
+    <binary>pairpaint</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-09">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

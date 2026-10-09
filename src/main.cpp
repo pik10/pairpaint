@@ -56,11 +56,12 @@ int main(int argc, char *argv[])
     QLoggingCategory::setFilterRules(QStringLiteral("qt.qpa.wayland.textinput=false"));
 
     QApplication app(argc, argv);
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral(PAIRPAINT_VERSION));
     // Identify with the desktop entry (window icon, taskbar grouping) only when it is
     // installed; otherwise the desktop portal rejects the unknown app ID.
-    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, QStringLiteral("pairpaint.desktop")).isEmpty())
-        QApplication::setDesktopFileName(QStringLiteral("pairpaint"));
+    const QString appId = QStringLiteral("io.github.pik10.PairPaint");
+    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, appId + QStringLiteral(".desktop")).isEmpty())
+        QApplication::setDesktopFileName(appId);
     applyDarkTheme(app);
 
     QCommandLineParser parser;

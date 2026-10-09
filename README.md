@@ -5,6 +5,19 @@
 A cross-platform, layered raster image editor in the spirit of Photoshop, written in C++17 with Qt 6.
 Runs on Linux, Windows and macOS from the same source.
 
+## Download
+
+**Linux:** download `PairPaint-<version>-x86_64.AppImage` from the
+[latest release](../../releases/latest), then:
+
+```sh
+chmod +x PairPaint-*.AppImage
+./PairPaint-*.AppImage
+```
+
+No installation needed; it runs on most distributions from the last few years.
+Windows and macOS downloads are coming; meanwhile you can [build from source](#building).
+
 ## Features
 
 - **Layers**: add, duplicate, delete, reorder, merge down, flatten, rename, show/hide, opacity,

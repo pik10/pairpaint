@@ -1,0 +1,78 @@
+# Builds release downloads.
+#
+# - Pushing a tag like v0.1.0 builds the AppImage and publishes it on a GitHub Release.
+# - Running the workflow by hand (Actions tab > Release > Run workflow) only builds it,
+#   as a downloadable artifact, without publishing anything.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to create the GitHub Release
+
+jobs:
+  linux-appimage:
+    # Build on an older Ubuntu: the AppImage then also runs on older distributions.
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'  # long-term support release
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libwayland-dev
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DPAIRPAINT_BUILD_TESTS=OFF
+          cmake --build build --parallel
+          DESTDIR="$PWD/AppDir" cmake --install build
+
+      - name: Package AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'  # the runner has no FUSE
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+          # Include Wayland support next to X11, so the app runs natively on both.
+          EXTRA_PLATFORM_PLUGINS: libqwayland-egl.so;libqwayland-generic.so
+          EXTRA_QT_PLUGINS: wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || version="dev-${GITHUB_SHA::7}"
+          export OUTPUT="PairPaint-${version}-x86_64.AppImage"
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          ls -la "$OUTPUT"
+
+      - name: Smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          chmod +x PairPaint-*.AppImage
+          ./PairPaint-*.AppImage --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PairPaint-AppImage
+          path: PairPaint-*.AppImage
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PairPaint-*.AppImage
+          generate_release_notes: true

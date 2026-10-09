@@ -30,11 +30,14 @@ target_link_libraries(pairpaint_core PUBLIC Qt6::Widgets Qt6::Concurrent)
 
 qt_add_executable(pairpaint src/main.cpp)
 target_link_libraries(pairpaint PRIVATE pairpaint_core)
+target_compile_definitions(pairpaint PRIVATE PAIRPAINT_VERSION="${PROJECT_VERSION}")
+set(PAIRPAINT_APP_ID io.github.pik10.PairPaint)
 set_target_properties(pairpaint PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_BUNDLE_NAME PairPaint
-    MACOSX_BUNDLE_GUI_IDENTIFIER org.pairpaint.PairPaint
+    MACOSX_BUNDLE_GUI_IDENTIFIER ${PAIRPAINT_APP_ID}
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
 )
 
 foreach(target pairpaint_core pairpaint)
@@ -56,5 +59,12 @@ install(TARGETS pairpaint
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(UNIX AND NOT APPLE)
-    install(FILES packaging/pairpaint.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/${PAIRPAINT_APP_ID}.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/${PAIRPAINT_APP_ID}.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(FILES packaging/${PAIRPAINT_APP_ID}.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    foreach(size 32 48 64 128 256 512)
+        install(FILES packaging/icons/${size}x${size}/${PAIRPAINT_APP_ID}.png
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${size}x${size}/apps)
+    endforeach()
 endif()
