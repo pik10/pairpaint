@@ -17,7 +17,7 @@
     <ul>
       <li>Layers with all Photoshop blend modes, masks, groups, clipping masks and styles (shadow, glow, stroke)</li>
       <li>Adjustment layers: Levels, Curves, Hue/Saturation, Brightness/Contrast and more</li>
-      <li>Brush, Clone Stamp, Healing Brush, Smudge, Dodge, Burn, gradients, shapes, and text typed on the canvas</li>
+      <li>Brush, Clone Stamp, Spot Healing and Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, gradients, shapes, and text typed on the canvas</li>
       <li>Selections with feather, expand, contract and color range; free transform</li>
       <li>Opens and saves layered Photoshop PSD files</li>
       <li>Pen tablet pressure support</li>
@@ -44,6 +44,17 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-10-09">
+      <description>
+        <p>New retouching and selection tools.</p>
+        <ul>
+          <li>Spot Healing Brush: paint over blemishes, no source point needed</li>
+          <li>Polygonal Lasso for straight-edged selections</li>
+          <li>Crop with aspect ratio presets and straightening</li>
+          <li>Blur, Sharpen and Sponge brushes</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-09">
       <description>
         <p>Layer groups and styles, better Photoshop compatibility, and typing text on the canvas.</p>

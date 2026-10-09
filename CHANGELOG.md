@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-09
 
 ### New
 - **Spot Healing Brush** (J): paint over spots and blemishes; a matching patch nearby is found
