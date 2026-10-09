@@ -306,6 +306,9 @@ void MainWindow::createMenus()
         addAction(adjLayer, Adjustments::name(type) + QStringLiteral("…"), {}, [this, type] { newAdjustmentLayer(type); });
     }
     addAction(layer, tr("Layer &Content Options…"), {}, [this] { if (doc()) editLayer(doc()->activeIndex()); });
+    addAction(layer, tr("Create / Release &Clipping Mask"), QKeySequence("Ctrl+Alt+G"), [this] {
+        withDoc([](Document *d) { d->setLayerClipped(d->activeIndex(), !d->activeLayer().clipped); });
+    });
     addAction(layer, tr("Layer St&yle…"), {}, [this] { layerStyle(); });
     addAction(layer, tr("Clear Layer Style"), {}, [this] {
         withDoc([](Document *d) { d->setLayerStyle(d->activeIndex(), LayerStyle()); });
@@ -725,7 +728,8 @@ void MainWindow::openFile(const QString &path)
     }
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
-    Document *d = FileIO::load(abs, &error);
+    QString warning;
+    Document *d = FileIO::load(abs, &error, &warning);
     QApplication::restoreOverrideCursor();
     if (!d) {
         QMessageBox::critical(this, tr("Open"), tr("Could not open %1:\n%2").arg(QFileInfo(abs).fileName(), error));
@@ -735,6 +739,8 @@ void MainWindow::openFile(const QString &path)
     addDocument(d);
     addRecentFile(abs);
     QSettings().setValue("lastDir", QFileInfo(abs).absolutePath());
+    if (!warning.isEmpty())
+        QMessageBox::information(this, QFileInfo(abs).fileName(), warning);
 }
 
 bool MainWindow::saveDocument(int tab, bool saveAs)
@@ -1095,7 +1101,7 @@ void MainWindow::editLayer(int index)
         } else if (l.isAdjustment() && l.adjustment.type != Adjustment::Invert) {
             const Adjustment::Type type = l.adjustment.type;
             const QString title = tr("Edit %1").arg(Adjustments::name(type));
-            FilterDialog dlg(title, adjustmentEditor(type, l.adjustment.params, d->flattened()),
+            FilterDialog dlg(title, adjustmentEditor(type, Adjustments::mainParams(type, l.adjustment.params), d->flattened()),
                              adjustmentLayerTarget(d, index, title, nullptr), this);
             dlg.exec();
         } else {

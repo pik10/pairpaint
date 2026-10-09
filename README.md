@@ -29,10 +29,11 @@ You can also [build from source](#building).
 
 ## Features
 
-- **Layers**: add, duplicate, delete, reorder, merge down, flatten, rename, show/hide, opacity,
-  13 blend modes (Multiply, Screen, Overlay, Soft/Hard Light, Difference, …)
-- **Layer groups**: nest layers in folders with their own opacity, blend mode and mask; move, duplicate,
-  merge or ungroup whole groups; adjustment layers inside a group only affect that group
+- **Layers**: add, duplicate, delete, reorder, merge down, flatten, rename, show/hide, opacity and Fill,
+  all 27 Photoshop blend modes (Multiply, Screen, Overlay, Vivid Light, Hue, Luminosity, …),
+  clipping masks
+- **Layer groups**: nest layers in folders with their own opacity, blend mode and mask (including
+  Photoshop's Pass Through); move, duplicate, merge or ungroup whole groups
 - **Layer styles** (non-destructive): Drop Shadow, Outer Glow, Stroke
 - **Layer masks**: reveal all / from selection, paint on the mask with any tool, disable, apply, delete
 - **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves,
@@ -53,7 +54,8 @@ You can also [build from source](#building).
 - **Image**: Image Size, Canvas Size (with anchor), Crop, Rotate, Flip
 - **Undo** (80 steps) with a History panel, multiple documents in tabs
 - **Files**: native `.pairpaint` project format (keeps everything); **Photoshop PSD** import (RGB, grayscale,
-  CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, blend modes) and layered export; open/export PNG, JPEG,
+  CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, vector masks, clipping masks, Fill, all blend modes,
+  adjustment layers, fill and shape layers, drop shadow / outer glow / stroke effects) and layered export; open/export PNG, JPEG,
   WebP, BMP, TIFF, GIF, …; clipboard copy/paste; drag and drop
 
 ## Building
@@ -87,6 +89,7 @@ cmake --build build -j
 | Clone Stamp / Healing | S / J | | Levels / Curves | Ctrl+L / Ctrl+M |
 | Smudge / Dodge / Burn | R / O / Shift+O | | Group / ungroup layers | Ctrl+G / Ctrl+Shift+G |
 | | | | Feather selection | Shift+F6 |
+| | | | Create / release clipping mask | Ctrl+Alt+G |
 | | | | Toggle editing mask / layer | Ctrl+\\ |
 | Paint Bucket / Gradient | K / G | | Hue/Sat, Invert, Desaturate | Ctrl+U, Ctrl+I, Ctrl+Shift+U |
 | Line / Rect / Ellipse | N / U / Shift+U | | Export | Ctrl+Shift+E |
@@ -110,18 +113,35 @@ to 15°), inside to move; Enter applies, Esc cancels.
 | `FileIO` | `.pairpaint` project format and flat image import/export |
 | `MainWindow`, `LayersPanel`, `ColorWidgets`, `Dialogs`, `FilterDialog` | User interface |
 
+## Photoshop compatibility
+
+The test suite opens Photoshop-made PSD files and compares PairPaint's rendering with the image
+Photoshop stored in the same file. These match Photoshop (under 1% of pixels differ): all blend modes
+except Dissolve, Pass Through groups, clipping masks (including clipping to groups), Fill opacity,
+shape layers, solid color fills, strokes, and the Levels, Curves (per channel), Invert, Threshold,
+Posterize and legacy Brightness/Contrast adjustment layers.
+
+When a PSD uses something PairPaint can't reproduce exactly, it says so when the file opens.
+
 ## Limitations
 
 - Editing is 8 bits per channel RGB. 16-bit and CMYK PSD files are converted to 8-bit RGB when opened.
-- PSD export writes pixel layers and masks; adjustment layers are left out (keep them in `.pairpaint`),
-  text layers are exported as pixels. Large-document PSB files are not supported.
-- Vector shapes are not supported, and layer styles other than Drop Shadow, Outer Glow and Stroke
-  (Photoshop layer effects in PSD files are not imported).
+- PSD import, rendered approximately: modern Brightness/Contrast (Photoshop's formula isn't public),
+  Hue/Saturation color ranges, Dissolve (a random pattern, so pixels differ), inside/center strokes,
+  and Photoshop's "advanced blending" options.
+- PSD import, not supported: Color Balance, Vibrance, Selective Color, Channel Mixer, Gradient Map,
+  Photo Filter, Exposure, Black & White and Color Lookup adjustment layers; inner shadow, inner glow,
+  bevel, satin and overlay effects. Vector masks become pixel masks; text stays as pixels.
+- PSD export writes pixel layers, groups, masks, clipping, Fill and blend modes; layer styles are merged
+  into the pixels, and adjustment layers are left out (keep them in `.pairpaint`). Large-document PSB
+  files are not supported.
+- No vector shapes or pen tool yet; layer styles are limited to Drop Shadow, Outer Glow and Stroke.
 
 ## Tests
 
 The test suite drives the real user interface offscreen (painting, selections, masks, adjustment layers,
-text, transform, clone/heal, filters, undo, and PSD/project round-trips) and checks the resulting pixels:
+text, transform, clone/heal, filters, undo, and PSD/project round-trips) and checks the resulting pixels.
+It also checks PairPaint's rendering of Photoshop-made files (`tests/data/psd-tools`) against Photoshop's own:
 
 ```sh
 cmake --build build -j && ctest --test-dir build --output-on-failure

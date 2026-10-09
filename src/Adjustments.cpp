@@ -76,15 +76,71 @@ QImage apply(const QImage &image, Adjustment::Type type, const QList<int> &p)
     const QList<int> d = defaults(type);
     const QList<int> v = (type == Adjustment::Curves || p.size() >= d.size()) ? p : d;
     switch (type) {
-    case Adjustment::BrightnessContrast: return Filters::brightnessContrast(image, v[0], v[1]);
-    case Adjustment::HueSaturation: return Filters::hueSaturation(image, v[0], v[1], v[2]);
-    case Adjustment::Levels: return Filters::levels(image, v[0], v[1], v[2] / 100.0, v[3], v[4]);
-    case Adjustment::Curves: return Filters::curves(image, v.size() >= 4 ? v : d);
+    case Adjustment::BrightnessContrast:
+        if (v.value(2) == 1)  // Photoshop's legacy formula (from PSD files)
+            return Filters::brightnessContrastLegacy(image, v[0], v[1]);
+        return Filters::brightnessContrast(image, v[0], v[1]);
+    case Adjustment::HueSaturation: return Filters::hueSaturation(image, v[0], v[1], v[2], v.mid(3));
+    case Adjustment::Levels: {
+        // Each channel's own levels first, then the levels for all channels.
+        const QList<int> all = Filters::levelsLut(v[0], v[1], v[2] / 100.0, v[3], v[4]);
+        QList<int> luts[3] = {all, all, all};
+        for (int c = 0; c < 3 && v.size() >= 10 + 5 * c; ++c) {
+            const QList<int> own = Filters::levelsLut(v[5 + 5 * c], v[6 + 5 * c], v[7 + 5 * c] / 100.0,
+                                                      v[8 + 5 * c], v[9 + 5 * c]);
+            for (int i = 0; i < 256; ++i)
+                luts[c][i] = all[own[i]];
+        }
+        return Filters::applyLuts(image, luts[0], luts[1], luts[2]);
+    }
+    case Adjustment::Curves: {
+        const QList<int> main = mainParams(type, v);
+        const QList<int> all = Filters::curveLut(main.size() >= 4 ? main : d);
+        QList<int> luts[3] = {all, all, all};
+        int pos = int(main.size()) + 1;  // after the -1 separator
+        for (int c = 0; c < 3 && pos < v.size(); ++c) {
+            const int count = v[pos++];
+            const QList<int> own = Filters::curveLut(v.mid(pos, 2 * count));
+            pos += 2 * count;
+            for (int i = 0; i < 256; ++i)
+                luts[c][i] = all[own[i]];
+        }
+        return Filters::applyLuts(image, luts[0], luts[1], luts[2]);
+    }
     case Adjustment::Invert: return Filters::invert(image);
     case Adjustment::Threshold: return Filters::threshold(image, v[0]);
     case Adjustment::Posterize: return Filters::posterize(image, v[0]);
     default: return image;
     }
+}
+
+QList<int> mainParams(Adjustment::Type type, const QList<int> &params)
+{
+    if (type == Adjustment::Levels)
+        return params.mid(0, 5);
+    if (type == Adjustment::HueSaturation || type == Adjustment::BrightnessContrast)
+        return params.mid(0, type == Adjustment::HueSaturation ? 3 : 2);
+    if (type == Adjustment::Curves) {
+        const qsizetype sep = params.indexOf(-1);
+        return sep < 0 ? params : params.mid(0, sep);
+    }
+    return params;
+}
+
+QList<int> withMainParams(Adjustment::Type type, const QList<int> &params, const QList<int> &main)
+{
+    if (type == Adjustment::Levels && params.size() > 5)
+        return main + params.mid(5);
+    if (type == Adjustment::HueSaturation && params.size() > 3)
+        return main + params.mid(3);  // color ranges
+    if (type == Adjustment::BrightnessContrast && params.size() > 2)
+        return main + params.mid(2);  // legacy flag
+    if (type == Adjustment::Curves) {
+        const qsizetype sep = params.indexOf(-1);
+        if (sep >= 0)
+            return main + params.mid(sep);
+    }
+    return main;
 }
 
 } // namespace Adjustments

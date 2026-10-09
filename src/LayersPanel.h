@@ -42,6 +42,8 @@ private:
     QComboBox *m_mode;
     QSlider *m_opacity;
     QLabel *m_opacityLabel;
+    QSlider *m_fill;
+    QLabel *m_fillLabel;
     QToolButton *m_editLayer;
     QToolButton *m_editMask;
     QList<QWidget *> m_docWidgets;

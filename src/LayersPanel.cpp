@@ -7,6 +7,7 @@
 
 #include <QButtonGroup>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QTreeWidget>
@@ -91,10 +92,19 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     m_list->setIconSize(QSize(2 * kThumb + kGap, kThumb));
     m_list->setEditTriggers(QAbstractItemView::EditKeyPressed);
 
-    auto *opacityRow = new QHBoxLayout;
-    opacityRow->addWidget(new QLabel(tr("Opacity")));
-    opacityRow->addWidget(m_opacity, 1);
-    opacityRow->addWidget(m_opacityLabel);
+    m_fill = new QSlider(Qt::Horizontal);
+    m_fill->setRange(0, 100);
+    m_fill->setToolTip(tr("Fill: fades the layer's pixels but not its layer style"));
+    m_fillLabel = new QLabel(QStringLiteral("100%"));
+    m_fillLabel->setMinimumWidth(36);
+
+    auto *opacityRow = new QGridLayout;
+    opacityRow->addWidget(new QLabel(tr("Opacity")), 0, 0);
+    opacityRow->addWidget(m_opacity, 0, 1);
+    opacityRow->addWidget(m_opacityLabel, 0, 2);
+    opacityRow->addWidget(new QLabel(tr("Fill")), 1, 0);
+    opacityRow->addWidget(m_fill, 1, 1);
+    opacityRow->addWidget(m_fillLabel, 1, 2);
 
     // Which part of the layer painting tools and filters affect.
     m_editLayer = new QToolButton;
@@ -173,7 +183,7 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     layout->addWidget(m_list, 1);
     layout->addLayout(targetRow);
     layout->addLayout(buttons);
-    m_docWidgets << m_mode << m_opacity << m_list;
+    m_docWidgets << m_mode << m_opacity << m_fill << m_list;
 
     connect(m_list, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
         if (!m_updating && m_doc && item)
@@ -203,6 +213,11 @@ LayersPanel::LayersPanel(QWidget *parent) : QWidget(parent)
     connect(m_mode, &QComboBox::activated, this, [this](int idx) {
         if (m_doc)
             m_doc->setLayerMode(m_doc->activeIndex(), QPainter::CompositionMode(m_mode->itemData(idx).toInt()));
+    });
+    connect(m_fill, &QSlider::valueChanged, this, [this](int v) {
+        m_fillLabel->setText(QStringLiteral("%1%").arg(v));
+        if (!m_updating && m_doc)
+            m_doc->setLayerFillOpacity(m_doc->activeIndex(), v / 100.0);
     });
     connect(m_opacity, &QSlider::valueChanged, this, [this](int v) {
         m_opacityLabel->setText(QStringLiteral("%1%").arg(v));
@@ -259,6 +274,15 @@ QIcon LayersPanel::thumbnailFor(int i) const
         p.setFont(f);
         p.setPen(Qt::white);
         p.drawText(QRect(left.right() - 13, left.bottom() - 13, 14, 14), Qt::AlignCenter, QStringLiteral("T"));
+    }
+    if (l.clipped) {
+        // Clipping mask: a bent arrow pointing down at the layer it is clipped to.
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(Qt::white, 2));
+        p.drawPolyline(QPolygonF({QPointF(4, 4), QPointF(4, 14), QPointF(12, 14)}));
+        p.drawLine(QPointF(4, 14), QPointF(8, 10));
+        p.restore();
     }
     if (l.style.any()) {
         const QRect badge(left.left(), left.bottom() - 12, 16, 13);
@@ -331,6 +355,8 @@ void LayersPanel::rebuild()
         m_mode->setCurrentIndex(std::max(0, m_mode->findData(int(a.mode))));
         m_mode->setEnabled(!a.isAdjustment());
         m_opacity->setValue(qRound(a.opacity * 100));
+        m_fill->setValue(qRound(a.fillOpacity * 100));
+        m_fill->setEnabled(a.kind == LayerKind::Normal);
     }
     updateTargetButtons();
     m_updating = false;

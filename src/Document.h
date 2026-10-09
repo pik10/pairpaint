@@ -4,6 +4,7 @@
 #pragma once
 
 #include "Adjustments.h"
+#include "Blending.h"
 
 #include <QColor>
 #include <QFont>
@@ -73,6 +74,8 @@ struct Layer {
     LayerStyle style;
     LayerKind kind = LayerKind::Normal;
     bool collapsed = false;  // group shown closed in the Layers panel
+    bool clipped = false;    // clipping mask: only visible where the layer below has pixels
+    qreal fillOpacity = 1.0; // fades the layer's pixels but not its effects (Photoshop's "Fill")
 
     bool isAdjustment() const { return adjustment.type != Adjustment::None; }
     bool isGroup() const { return kind == LayerKind::Group; }
@@ -175,6 +178,8 @@ public:
     void setLayerMode(int i, QPainter::CompositionMode mode);
     void renameLayer(int i, const QString &name);
     void setLayerStyle(int i, const LayerStyle &style);
+    void setLayerClipped(int i, bool clipped);
+    void setLayerFillOpacity(int i, qreal fill);
     QImage renderLayer(int i) const;  // one layer alone, with its mask and effects, at full opacity
     int effectsMargin() const;        // largest reach of any visible layer's effects
 

@@ -13,7 +13,11 @@ namespace Filters {
 QImage invert(const QImage &src);
 QImage desaturate(const QImage &src);
 QImage brightnessContrast(const QImage &src, int brightness, int contrast);
-QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness);
+// Photoshop's "Use Legacy" Brightness/Contrast: add brightness, then stretch around the middle.
+QImage brightnessContrastLegacy(const QImage &src, int brightness, int contrast);
+// `ranges`: optional color ranges, 7 values each: the range's outer start, inner start, inner
+// end and outer end hue (degrees), then its own hue, saturation and lightness changes.
+QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness, const QList<int> &ranges = {});
 QImage threshold(const QImage &src, int level);
 QImage posterize(const QImage &src, int levels);
 QImage gaussianBlur(const QImage &src, double radius);
@@ -24,6 +28,11 @@ QImage pixelate(const QImage &src, int cellSize);
 QImage dodgeBurn(const QImage &src, bool burn, int range);
 QImage levels(const QImage &src, int inBlack, int inWhite, double gamma, int outBlack, int outWhite);
 QImage curves(const QImage &src, const QList<int> &points);  // flattened x,y pairs in 0..255
+
+// Applies separate lookup tables (256 entries each) to the red, green and blue channels.
+QImage applyLuts(const QImage &src, const QList<int> &red, const QList<int> &green, const QList<int> &blue);
+// Lookup table for Levels: input black/white, gamma, output black/white.
+QList<int> levelsLut(int inBlack, int inWhite, double gamma, int outBlack, int outWhite);
 
 // Lookup table of a smooth monotone curve through the control points.
 QList<int> curveLut(const QList<int> &points);

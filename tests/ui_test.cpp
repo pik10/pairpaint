@@ -17,6 +17,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -367,6 +368,109 @@ static void testGroups(MainWindow &w, ToolManager *tools, ToolSettings *settings
     d->undoStack()->undo();
     d->ungroup();
     CHECK(groupCount(d) == 0 && d->layerCount() == 2 && d->activeLayer().name == "Red");
+}
+
+
+// Photoshop compatibility: each file was saved by Photoshop, which also stored its own
+// rendering of the image. PairPaint's rendering of the layers must match it.
+static void testPhotoshopFiles()
+{
+    const QDir dir(QStringLiteral(PAIRPAINT_TEST_DATA "/psd-tools"));
+    const QStringList files = dir.entryList({QStringLiteral("*.psd")});
+    CHECK(files.size() >= 20);
+    auto overWhite = [](const QImage &img) {
+        QImage out(img.size(), QImage::Format_RGB32);
+        out.fill(Qt::white);
+        QPainter p(&out);
+        p.drawImage(0, 0, img);
+        return out;
+    };
+    for (const QString &name : files) {
+        QString err;
+        Document *d = FileIO::load(dir.filePath(name), &err);
+        const QImage ref = Psd::readComposite(dir.filePath(name), &err);
+        if (!d || ref.isNull()) {
+            std::printf("FAIL could not read %s: %s\n", qPrintable(name), qPrintable(err));
+            ++fails;
+            continue;
+        }
+        const QImage a = overWhite(d->flattened()), b = overWhite(ref);
+        long differing = 0;
+        for (int y = 0; y < a.height(); ++y) {
+            const QRgb *pa = reinterpret_cast<const QRgb *>(a.constScanLine(y));
+            const QRgb *pb = reinterpret_cast<const QRgb *>(b.constScanLine(y));
+            for (int x = 0; x < a.width(); ++x)
+                if (std::max({std::abs(qRed(pa[x]) - qRed(pb[x])), std::abs(qGreen(pa[x]) - qGreen(pb[x])),
+                              std::abs(qBlue(pa[x]) - qBlue(pb[x]))}) > 12)
+                    ++differing;
+        }
+        const double percent = 100.0 * differing / (double(a.width()) * a.height());
+        std::printf("%s  %-45s %.2f%% of pixels differ from Photoshop\n", percent < 1.5 ? "ok  " : "FAIL",
+                    qPrintable(name), percent);
+        if (percent >= 1.5)
+            ++fails;
+        delete d;
+    }
+}
+
+// Blend modes, Fill opacity and clipping masks through the document API.
+static void testBlendingAndClipping()
+{
+    Document d(QSize(40, 40), QColor(128, 128, 128));
+    d.addLayer("Top");
+    d.activeLayer().image.fill(QColor(200, 100, 50));
+    const int top = d.activeIndex();
+    auto px = [&] { return d.flattened().pixelColor(20, 20); };
+
+    d.setLayerMode(top, Blend::LinearBurn);
+    CHECK(px() == QColor(73, 0, 0));          // 128 + 200 - 255 = 73, others clamp to 0
+    d.setLayerMode(top, Blend::Subtract);
+    CHECK(px() == QColor(0, 28, 78));         // 128 - top
+    d.setLayerMode(top, Blend::Luminosity);
+    const QColor lum = px();
+    CHECK(lum.red() == lum.green() && lum.green() == lum.blue());  // gray base keeps no hue
+    d.setLayerMode(top, QPainter::CompositionMode_SourceOver);
+
+    // Fill fades the pixels but not the layer style
+    d.setLayerFillOpacity(top, 0.0);
+    CHECK(px() == QColor(128, 128, 128));
+    d.undoStack()->undo();
+    CHECK(px() == QColor(200, 100, 50));
+
+    // Clipping mask: the clipped layer only shows where the layer below has pixels
+    d.activeLayer().image.fill(Qt::transparent);
+    QPainter p(&d.activeLayer().image);
+    p.fillRect(0, 0, 20, 40, QColor(200, 100, 50));   // left half only
+    p.end();
+    d.addLayer("Clipped");
+    d.activeLayer().image.fill(Qt::blue);
+    const int clipped = d.activeIndex();
+    CHECK(d.flattened().pixelColor(30, 20) == QColor(Qt::blue));   // not clipped yet: covers everything
+    d.setLayerClipped(clipped, true);
+    CHECK(d.flattened().pixelColor(30, 20) == QColor(128, 128, 128));  // right half: base is empty
+    CHECK(d.flattened().pixelColor(10, 20) == QColor(Qt::blue));       // left half: inside the base
+    d.setLayerOpacity(top, 0.5);                                         // base opacity applies to the group
+    CHECK(d.flattened().pixelColor(10, 20).blue() < 200);
+    d.setLayerOpacity(top, 1.0);
+    d.mergeDown();                                                       // merging keeps the clipping
+    CHECK(d.flattened().pixelColor(30, 20) == QColor(128, 128, 128) && d.flattened().pixelColor(10, 20) == QColor(Qt::blue));
+    d.undoStack()->undo();
+
+    // Saved and reloaded in both formats
+    QString err, warn;
+    d.setLayerFillOpacity(clipped, 0.4);
+    CHECK(FileIO::saveProject(&d, tmpPath("clip.pairpaint"), &err));
+    Document *loaded = FileIO::load(tmpPath("clip.pairpaint"), &err);
+    CHECK(loaded && loaded->layer(clipped).clipped && qFuzzyCompare(loaded->layer(clipped).fillOpacity, 0.4));
+    delete loaded;
+    d.setLayerMode(top, Blend::VividLight);
+    CHECK(Psd::write(&d, tmpPath("clip.psd"), &err, &warn));
+    Document *fromPsd = FileIO::load(tmpPath("clip.psd"), &err);
+    CHECK(fromPsd && fromPsd->layer(clipped).clipped && std::abs(fromPsd->layer(clipped).fillOpacity - 0.4) < 0.01
+          && fromPsd->layer(top).mode == Blend::VividLight);
+    if (fromPsd)
+        CHECK(fromPsd->flattened() == d.flattened());
+    delete fromPsd;
 }
 
 int main(int argc, char **argv) {
@@ -729,6 +833,8 @@ int main(int argc, char **argv) {
     testRetouchTools(w, tools, settings);
     testLayerStyles();
     testGroups(w, tools, settings);
+    testBlendingAndClipping();
+    testPhotoshopFiles();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;

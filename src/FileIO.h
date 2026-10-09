@@ -18,7 +18,8 @@ bool isPsdFile(const QString &path);
 bool isLayeredFormat(const QString &path);  // .pairpaint or .psd
 // Saves in the format given by the file extension (layered or flattened).
 bool save(const Document *doc, const QString &path, QString *error, QString *warning);
-Document *load(const QString &path, QString *error);
+// `warning` (optional) receives notes about content that couldn't be fully reproduced.
+Document *load(const QString &path, QString *error, QString *warning = nullptr);
 bool saveProject(const Document *doc, const QString &path, QString *error);
 bool exportImage(const Document *doc, const QString &path, QString *error);
 

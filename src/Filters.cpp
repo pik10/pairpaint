@@ -252,20 +252,52 @@ QImage brightnessContrast(const QImage &src, int brightness, int contrast)
     return mapLut(src, [&](int v) { return int(std::lround(factor * (v + brightness - 128) + 128)); });
 }
 
-QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness)
+QImage brightnessContrastLegacy(const QImage &src, int brightness, int contrast)
 {
-    const float dh = hue / 360.0f, ds = saturation / 100.0f, dl = lightness / 100.0f;
+    const double c = std::clamp(contrast, -100, 99) / 100.0;
+    const double slope = c >= 0 ? 1.0 / (1.0 - c) : 1.0 + c;
+    return mapLut(src, [&](int v) { return int(std::lround((v + brightness - 127.5) * slope + 127.5)); });
+}
+
+QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness, const QList<int> &ranges)
+{
+    // How strongly a hue (degrees) falls in a color range: 1 between the inner limits b..c,
+    // fading to 0 at the outer limits a and d. Ranges may wrap around 360.
+    auto weight = [](float hd, int a, int b, int c, int d) {
+        auto dist = [](float from, float to) { return std::fmod(to - from + 720.0f, 360.0f); };
+        const float t = dist(a, hd), ab = dist(a, b), ac = dist(a, c), ad = dist(a, d);
+        if (t <= ab)
+            return ab > 0 ? t / ab : 1.0f;
+        if (t <= ac)
+            return 1.0f;
+        if (t <= ad)
+            return ad > ac ? (ad - t) / (ad - ac) : 0.0f;
+        return 0.0f;
+    };
+    const int rangeCount = int(ranges.size() / 7);
     return mapPixels(src, [&](QRgb p) {
         if (qAlpha(p) == 0)
             return p;
         float h, s, l;
         rgbToHsl(qRed(p), qGreen(p), qBlue(p), h, s, l);
-        h = std::fmod(h + dh + 1.0f, 1.0f);
-        s = ds >= 0 ? s + (1 - s) * ds * s : s * (1 + ds);  // boost saturated colors more than grays
-        l = dl >= 0 ? l + (1 - l) * dl : l * (1 + dl);
+        // Color ranges add their hue and saturation changes, weighted by how much the
+        // pixel's hue belongs to them (compared with Photoshop's output, this works best).
+        float dh = hue, ds = saturation;
+        for (int k = 0; k < rangeCount && s > 0; ++k) {
+            const int *v = ranges.constData() + 7 * k;
+            const float w = weight(h * 360.0f, v[0], v[1], v[2], v[3]);
+            dh += w * v[4];
+            ds += w * v[5];
+        }
+        h = std::fmod(h + dh / 360.0f + 2.0f, 1.0f);
+        ds = std::clamp(ds / 100.0f, -1.0f, 1.0f);
+        s = ds >= 0 ? s + (1 - s) * ds : s * (1 + ds);
         int r, g, b;
-        hslToRgb(h, std::clamp(s, 0.0f, 1.0f), std::clamp(l, 0.0f, 1.0f), r, g, b);
-        return qRgba(r, g, b, qAlpha(p));
+        hslToRgb(h, std::clamp(s, 0.0f, 1.0f), l, r, g, b);
+        // Lightness blends each channel toward white or black, as Photoshop does.
+        const float dl = std::clamp(lightness / 100.0f, -1.0f, 1.0f);
+        auto light = [dl](int v) { return clamp255(int(std::lround(dl >= 0 ? v + (255 - v) * dl : v * (1 + dl)))); };
+        return qRgba(light(r), light(g), light(b), qAlpha(p));
     });
 }
 
@@ -279,8 +311,9 @@ QImage threshold(const QImage &src, int level)
 
 QImage posterize(const QImage &src, int levels)
 {
-    const int n = std::max(2, levels) - 1;
-    return mapLut(src, [&](int v) { return int(std::lround(std::round(v * n / 255.0) * 255.0 / n)); });
+    // Photoshop's formula: split 0..255 into `levels` equal bands.
+    const int n = std::max(2, levels);
+    return mapLut(src, [&](int v) { return (v * n / 256) * 255 / (n - 1); });
 }
 
 QImage gaussianBlur(const QImage &src, double radius)
@@ -403,6 +436,64 @@ QImage levels(const QImage &src, int inBlack, int inWhite, double gamma, int out
     });
 }
 
+QImage applyLuts(const QImage &src, const QList<int> &red, const QList<int> &green, const QList<int> &blue)
+{
+    return mapPixels(src, [&](QRgb p) {
+        return qRgba(red[qRed(p)], green[qGreen(p)], blue[qBlue(p)], qAlpha(p));
+    });
+}
+
+QList<int> levelsLut(int inBlack, int inWhite, double gamma, int outBlack, int outWhite)
+{
+    inWhite = std::max(inWhite, inBlack + 1);
+    gamma = std::max(0.01, gamma);
+    QList<int> lut(256);
+    for (int v = 0; v < 256; ++v) {
+        const double t = std::clamp((v - inBlack) / double(inWhite - inBlack), 0.0, 1.0);
+        lut[v] = clamp255(int(std::lround(outBlack + std::pow(t, 1.0 / gamma) * (outWhite - outBlack))));
+    }
+    return lut;
+}
+
+// Natural cubic spline through the points (how Photoshop draws curves); may overshoot,
+// so the result is clamped.
+QList<int> splineLut(std::vector<std::pair<double, double>> pts)
+{
+    const size_t n = pts.size();
+    std::vector<double> h(n - 1), alpha(n, 0), l(n, 1), mu(n, 0), z(n, 0), c(n, 0), b(n - 1), d(n - 1);
+    for (size_t i = 0; i + 1 < n; ++i)
+        h[i] = pts[i + 1].first - pts[i].first;
+    for (size_t i = 1; i + 1 < n; ++i)
+        alpha[i] = 3 / h[i] * (pts[i + 1].second - pts[i].second) - 3 / h[i - 1] * (pts[i].second - pts[i - 1].second);
+    for (size_t i = 1; i + 1 < n; ++i) {
+        l[i] = 2 * (pts[i + 1].first - pts[i - 1].first) - h[i - 1] * mu[i - 1];
+        mu[i] = h[i] / l[i];
+        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+    }
+    for (size_t j = n - 1; j-- > 0;) {
+        c[j] = z[j] - mu[j] * c[j + 1];
+        b[j] = (pts[j + 1].second - pts[j].second) / h[j] - h[j] * (c[j + 1] + 2 * c[j]) / 3;
+        d[j] = (c[j + 1] - c[j]) / (3 * h[j]);
+    }
+    QList<int> lut(256);
+    size_t k = 0;
+    for (int x = 0; x < 256; ++x) {
+        double y;
+        if (x <= pts.front().first) {
+            y = pts.front().second;
+        } else if (x >= pts.back().first) {
+            y = pts.back().second;
+        } else {
+            while (x > pts[k + 1].first)
+                ++k;
+            const double t = x - pts[k].first;
+            y = pts[k].second + b[k] * t + c[k] * t * t + d[k] * t * t * t;
+        }
+        lut[x] = clamp255(int(std::lround(y)));
+    }
+    return lut;
+}
+
 QList<int> curveLut(const QList<int> &points)
 {
     std::vector<std::pair<double, double>> pts;
@@ -415,7 +506,9 @@ QList<int> curveLut(const QList<int> &points)
         std::iota(lut.begin(), lut.end(), 0);
         return lut;
     }
-    // Monotone cubic (Fritsch-Carlson) interpolation: smooth without overshoot.
+    if (pts.size() >= 3)
+        return splineLut(pts);
+    // Two points: a straight line.
     const size_t n = pts.size();
     std::vector<double> d(n - 1), m(n);
     for (size_t i = 0; i + 1 < n; ++i)

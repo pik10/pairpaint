@@ -18,7 +18,7 @@
 namespace {
 
 constexpr quint32 kMagic = 0x50504E54;  // "PPNT"
-constexpr quint32 kVersion = 4;  // 2: masks, adjustment layers, text; 3: layer styles; 4: groups
+constexpr quint32 kVersion = 5;  // 2: masks, adjustments, text; 3: styles; 4: groups; 5: clipping, fill
 const QString kProjectSuffix = QStringLiteral("pairpaint");
 
 QString projectFilterEntry() { return QObject::tr("PairPaint Project (*.pairpaint)"); }
@@ -135,6 +135,11 @@ Document *loadProject(const QString &path, QString *error)
             if (kind == int(LayerKind::Group) || kind == int(LayerKind::GroupEnd))
                 l.kind = LayerKind(kind);
         }
+        if (version >= 5) {
+            double fill = 1.0;
+            in >> l.clipped >> fill;
+            l.fillOpacity = fill;
+        }
         s.layers.append(l);
     }
     if (in.status() != QDataStream::Ok) {
@@ -188,12 +193,12 @@ bool save(const Document *doc, const QString &path, QString *error, QString *war
     return exportImage(doc, path, error);
 }
 
-Document *load(const QString &path, QString *error)
+Document *load(const QString &path, QString *error, QString *warning)
 {
     if (isProjectFile(path))
         return loadProject(path, error);
     if (isPsdFile(path))
-        return Psd::read(path, error);
+        return Psd::read(path, error, warning);
 
     QImageReader reader(path);
     reader.setAutoTransform(true);  // honor EXIF orientation
@@ -229,6 +234,7 @@ bool saveProject(const Document *doc, const QString &path, QString *error)
                       st.glowSize, st.strokeOpacity, st.strokeSize, 0, 0, 0})  // 3 spare slots
             out << qint32(v);
         out << qint32(l.kind) << l.collapsed;
+        out << l.clipped << double(l.fillOpacity);
     }
     if (out.status() != QDataStream::Ok || !f.commit()) {
         *error = f.errorString();

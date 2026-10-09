@@ -93,25 +93,7 @@ void blendAdjustment(QImage &out, const Layer &l, const QRect &r)
 {
     const QImage adj = Adjustments::apply(out, l.adjustment.type, l.adjustment.params)
                            .convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    const bool useMask = !l.mask.isNull() && l.maskEnabled;
-    const int opacity = qRound(l.opacity * 255);
-    for (int y = 0; y < out.height(); ++y) {
-        QRgb *o = reinterpret_cast<QRgb *>(out.scanLine(y));
-        const QRgb *a = reinterpret_cast<const QRgb *>(adj.constScanLine(y));
-        const QRgb *m = useMask ? reinterpret_cast<const QRgb *>(l.mask.constScanLine(r.top() + y)) + r.left() : nullptr;
-        for (int x = 0; x < out.width(); ++x) {
-            const int k = m ? opacity * maskValue(m[x]) / 255 : opacity;
-            if (k == 0)
-                continue;
-            if (k == 255) {
-                o[x] = a[x];
-                continue;
-            }
-            const QRgb p = o[x], q = a[x];
-            auto mix = [k](int u, int v) { return u + (v - u) * k / 255; };
-            o[x] = qRgba(mix(qRed(p), qRed(q)), mix(qGreen(p), qGreen(q)), mix(qBlue(p), qBlue(q)), mix(qAlpha(p), qAlpha(q)));
-        }
-    }
+    Blend::mix(out, adj, l.opacity * l.fillOpacity, l.maskEnabled ? l.mask : QImage(), r);
 }
 
 QImage tinted(const QImage &alphaSource, const QColor &color)
@@ -154,9 +136,30 @@ QImage renderWithEffects(const Layer &l, const QRect &r)
         p.setOpacity(s.strokeOpacity / 100.0);
         p.drawImage(0, 0, tinted(Filters::morphMask(alpha, s.strokeSize), s.strokeColor));
     }
-    p.setOpacity(1.0);
+    p.setOpacity(l.fillOpacity);  // Fill fades the pixels, not the effects
     p.drawImage(0, 0, content);
     return out;
+}
+
+// A layer's own pixels for region `r` (mask, effects and Fill applied), before its
+// opacity and blend mode.
+QImage layerContent(const Layer &l, const QRect &r)
+{
+    if (l.style.any())
+        return renderWithEffects(l, r);
+    QImage part = l.image.copy(r);
+    if (!l.mask.isNull() && l.maskEnabled)
+        multiplyByMask(part, l.mask, r);
+    if (l.fillOpacity < 1.0) {
+        QImage faded(part.size(), QImage::Format_ARGB32_Premultiplied);
+        faded.fill(Qt::transparent);
+        QPainter p(&faded);
+        p.setOpacity(l.fillOpacity);
+        p.drawImage(0, 0, part);
+        p.end();
+        part = faded;
+    }
+    return part;
 }
 
 // Composites one layer onto `out`, which holds the document region `r`.
@@ -168,18 +171,31 @@ void compositeLayer(QImage &out, const Layer &l, const QRect &r)
         blendAdjustment(out, l, r);
         return;
     }
-    QPainter p(&out);
-    p.setOpacity(l.opacity);
-    p.setCompositionMode(l.mode);
-    if (l.style.any()) {
-        p.drawImage(0, 0, renderWithEffects(l, r));
-    } else if (!l.mask.isNull() && l.maskEnabled) {
-        QImage part = l.image.copy(r);
-        multiplyByMask(part, l.mask, r);
-        p.drawImage(0, 0, part);
-    } else {
+    const bool plain = !l.style.any() && (l.mask.isNull() || !l.maskEnabled) && l.fillOpacity >= 1.0;
+    if (plain && !Blend::isCustom(l.mode)) {
+        QPainter p(&out);  // fast path: no copy needed
+        p.setOpacity(l.opacity);
+        p.setCompositionMode(l.mode);
         p.drawImage(QPoint(0, 0), l.image, r);
+        return;
     }
+    Blend::draw(out, layerContent(l, r), l.mode, l.opacity, r.topLeft());
+}
+
+// Draws clipped layer `c` onto `base` (its clipping base's pixels for region r): blended
+// with c's own mode and opacity, but only where the base has pixels.
+void clipOnto(QImage &base, const Layer &c, const QRect &r)
+{
+    if (!c.visible || c.opacity <= 0.0)
+        return;
+    if (c.isAdjustment()) {
+        blendAdjustment(base, c, r);  // adjustments keep the base's transparency
+        return;
+    }
+    QImage blended = base.copy();
+    Blend::draw(blended, layerContent(c, r), c.mode, c.opacity, r.topLeft());
+    Blend::restoreAlpha(blended, base);
+    base = blended;
 }
 
 // For every GroupEnd marker the index of its header, and vice versa (-1 if unmatched).
@@ -211,18 +227,80 @@ void compositeRange(QImage &out, const QList<Layer> &layers, const QList<int> &m
             if (h < 0)
                 continue;
             const Layer &g = layers[h];
-            if (g.visible && g.opacity > 0.0) {
+            const bool masked = !g.mask.isNull() && g.maskEnabled;
+            int clipEnd = h + 1;  // layers clipped to the whole group
+            while (clipEnd < end && layers[clipEnd].clipped && layers[clipEnd].kind == LayerKind::Normal)
+                ++clipEnd;
+            if (!g.visible || g.opacity <= 0.0) {
+                // hidden group (and anything clipped to it)
+            } else if (clipEnd > h + 1 && g.mode == Blend::PassThrough) {
+                // Clipped to a pass-through group: the group blends into what is below it, and
+                // the clipped layers blend with that result, but only within the group's shape.
+                QImage shape(r.size(), QImage::Format_ARGB32_Premultiplied);
+                shape.fill(Qt::transparent);
+                compositeRange(shape, layers, match, i + 1, h, r);
+                if (masked)
+                    multiplyByMask(shape, g.mask, r);
+                QImage result = out.copy();
+                compositeRange(result, layers, match, i + 1, h, r);
+                if (g.opacity < 1.0 || masked) {
+                    QImage blended = out.copy();
+                    Blend::mix(blended, result, g.opacity, masked ? g.mask : QImage(), r);
+                    result = blended;
+                }
+                for (int c = h + 1; c < clipEnd; ++c) {
+                    const Layer &cl = layers[c];
+                    if (!cl.visible || cl.opacity <= 0.0 || cl.isAdjustment())
+                        continue;
+                    QImage withClip = result.copy();
+                    Blend::draw(withClip, layerContent(cl, r), cl.mode, cl.opacity, r.topLeft());
+                    Blend::mixByAlpha(result, withClip, shape);
+                }
+                out = result;
+            } else if (clipEnd > h + 1) {
+                // A group as a clipping base is rendered on its own first.
+                QImage base(r.size(), QImage::Format_ARGB32_Premultiplied);
+                base.fill(Qt::transparent);
+                compositeRange(base, layers, match, i + 1, h, r);
+                if (masked)
+                    multiplyByMask(base, g.mask, r);
+                for (int c = h + 1; c < clipEnd; ++c)
+                    clipOnto(base, layers[c], r);
+                Blend::draw(out, base, g.mode == Blend::PassThrough ? QPainter::CompositionMode_SourceOver : g.mode,
+                            g.opacity, r.topLeft());
+            } else if (g.mode == Blend::PassThrough) {
+                // The group's layers blend straight into what is below the group.
+                if (g.opacity >= 1.0 && !masked) {
+                    compositeRange(out, layers, match, i + 1, h, r);
+                } else {
+                    QImage result = out.copy();
+                    compositeRange(result, layers, match, i + 1, h, r);
+                    Blend::mix(out, result, g.opacity, masked ? g.mask : QImage(), r);
+                }
+            } else {
                 QImage group(r.size(), QImage::Format_ARGB32_Premultiplied);
                 group.fill(Qt::transparent);
                 compositeRange(group, layers, match, i + 1, h, r);
-                if (!g.mask.isNull() && g.maskEnabled)
+                if (masked)
                     multiplyByMask(group, g.mask, r);
-                QPainter p(&out);
-                p.setOpacity(g.opacity);
-                p.setCompositionMode(g.mode);
-                p.drawImage(0, 0, group);
+                Blend::draw(out, group, g.mode, g.opacity, r.topLeft());
             }
-            i = h;
+            i = std::max(h, clipEnd - 1);
+            continue;
+        }
+        // A layer followed by clipped layers forms a clipping group: they are drawn onto the
+        // base layer's pixels, then the result takes the base's opacity and blend mode.
+        int clipEnd = i + 1;
+        while (clipEnd < end && layers[clipEnd].clipped && layers[clipEnd].kind == LayerKind::Normal)
+            ++clipEnd;
+        if (clipEnd > i + 1 && l.kind == LayerKind::Normal && !l.isAdjustment() && !l.clipped) {
+            if (l.visible && l.opacity > 0.0) {
+                QImage base = layerContent(l, r);
+                for (int c = i + 1; c < clipEnd; ++c)
+                    clipOnto(base, layers[c], r);
+                Blend::draw(out, base, l.mode, l.opacity, r.topLeft());
+            }
+            i = clipEnd - 1;
             continue;
         }
         compositeLayer(out, l, r);
@@ -244,20 +322,36 @@ QString textLayerName(const TextData &t) { return t.text.section('\n', 0, 0).lef
 
 QList<QPair<QString, QPainter::CompositionMode>> blendModes()
 {
+    // Same order and grouping as Photoshop.
     return {
+        {QObject::tr("Pass Through"), Blend::PassThrough},  // groups only
         {QObject::tr("Normal"), QPainter::CompositionMode_SourceOver},
-        {QObject::tr("Multiply"), QPainter::CompositionMode_Multiply},
-        {QObject::tr("Screen"), QPainter::CompositionMode_Screen},
-        {QObject::tr("Overlay"), QPainter::CompositionMode_Overlay},
+        {QObject::tr("Dissolve"), Blend::Dissolve},
         {QObject::tr("Darken"), QPainter::CompositionMode_Darken},
-        {QObject::tr("Lighten"), QPainter::CompositionMode_Lighten},
-        {QObject::tr("Color Dodge"), QPainter::CompositionMode_ColorDodge},
+        {QObject::tr("Multiply"), QPainter::CompositionMode_Multiply},
         {QObject::tr("Color Burn"), QPainter::CompositionMode_ColorBurn},
-        {QObject::tr("Hard Light"), QPainter::CompositionMode_HardLight},
+        {QObject::tr("Linear Burn"), Blend::LinearBurn},
+        {QObject::tr("Darker Color"), Blend::DarkerColor},
+        {QObject::tr("Lighten"), QPainter::CompositionMode_Lighten},
+        {QObject::tr("Screen"), QPainter::CompositionMode_Screen},
+        {QObject::tr("Color Dodge"), QPainter::CompositionMode_ColorDodge},
+        {QObject::tr("Linear Dodge (Add)"), QPainter::CompositionMode_Plus},
+        {QObject::tr("Lighter Color"), Blend::LighterColor},
+        {QObject::tr("Overlay"), QPainter::CompositionMode_Overlay},
         {QObject::tr("Soft Light"), QPainter::CompositionMode_SoftLight},
+        {QObject::tr("Hard Light"), QPainter::CompositionMode_HardLight},
+        {QObject::tr("Vivid Light"), Blend::VividLight},
+        {QObject::tr("Linear Light"), Blend::LinearLight},
+        {QObject::tr("Pin Light"), Blend::PinLight},
+        {QObject::tr("Hard Mix"), Blend::HardMix},
         {QObject::tr("Difference"), QPainter::CompositionMode_Difference},
         {QObject::tr("Exclusion"), QPainter::CompositionMode_Exclusion},
-        {QObject::tr("Linear Dodge (Add)"), QPainter::CompositionMode_Plus},
+        {QObject::tr("Subtract"), Blend::Subtract},
+        {QObject::tr("Divide"), Blend::Divide},
+        {QObject::tr("Hue"), Blend::Hue},
+        {QObject::tr("Saturation"), Blend::Saturation},
+        {QObject::tr("Color"), Blend::Color},
+        {QObject::tr("Luminosity"), Blend::Luminosity},
     };
 }
 
@@ -789,7 +883,10 @@ void Document::mergeDown()
     Layer &lower = m_state.layers[a - 1];
     bakeMask(lower);
     lower.text = TextData();
-    compositeLayer(lower.image, upper, rect());
+    if (upper.clipped)
+        clipOnto(lower.image, upper, rect());
+    else
+        compositeLayer(lower.image, upper, rect());
     m_state.layers.removeAt(a);
     m_state.active = a - 1;
     m_editMask = false;
@@ -967,6 +1064,24 @@ void Document::setLayerStyle(int i, const LayerStyle &style)
     const DocState before = m_state;
     layer(i).style = style;
     finish(style.any() ? tr("Layer Style") : tr("Clear Layer Style"), before, Pixels | Structure);
+}
+
+void Document::setLayerClipped(int i, bool clipped)
+{
+    if (layer(i).clipped == clipped || layer(i).kind != LayerKind::Normal)
+        return;
+    const DocState before = m_state;
+    layer(i).clipped = clipped;
+    finish(clipped ? tr("Create Clipping Mask") : tr("Release Clipping Mask"), before, Pixels | Structure);
+}
+
+void Document::setLayerFillOpacity(int i, qreal fill)
+{
+    if (qFuzzyCompare(layer(i).fillOpacity, fill))
+        return;
+    const DocState before = m_state;
+    layer(i).fillOpacity = fill;
+    finish(tr("Fill Opacity"), before, Pixels | Structure, 2000 + i);
 }
 
 QImage Document::renderLayer(int i) const

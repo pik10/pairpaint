@@ -7,9 +7,11 @@
 
 #include <QDataStream>
 #include <QFile>
+#include <QPainterPath>
 #include <QMap>
 #include <QObject>
 #include <QSaveFile>
+#include <QVariant>
 #include <QtEndian>
 
 namespace {
@@ -17,13 +19,20 @@ namespace {
 const QList<QPair<QByteArray, QPainter::CompositionMode>> &blendKeys()
 {
     static const QList<QPair<QByteArray, QPainter::CompositionMode>> keys = {
-        {"norm", QPainter::CompositionMode_SourceOver}, {"mul ", QPainter::CompositionMode_Multiply},
-        {"scrn", QPainter::CompositionMode_Screen},     {"over", QPainter::CompositionMode_Overlay},
-        {"dark", QPainter::CompositionMode_Darken},     {"lite", QPainter::CompositionMode_Lighten},
-        {"div ", QPainter::CompositionMode_ColorDodge}, {"idiv", QPainter::CompositionMode_ColorBurn},
-        {"hLit", QPainter::CompositionMode_HardLight},  {"sLit", QPainter::CompositionMode_SoftLight},
+        {"norm", QPainter::CompositionMode_SourceOver}, {"pass", Blend::PassThrough},
+        {"diss", Blend::Dissolve},                      {"dark", QPainter::CompositionMode_Darken},
+        {"mul ", QPainter::CompositionMode_Multiply},   {"idiv", QPainter::CompositionMode_ColorBurn},
+        {"lbrn", Blend::LinearBurn},                    {"dkCl", Blend::DarkerColor},
+        {"lite", QPainter::CompositionMode_Lighten},    {"scrn", QPainter::CompositionMode_Screen},
+        {"div ", QPainter::CompositionMode_ColorDodge}, {"lddg", QPainter::CompositionMode_Plus},
+        {"lgCl", Blend::LighterColor},                  {"over", QPainter::CompositionMode_Overlay},
+        {"sLit", QPainter::CompositionMode_SoftLight},  {"hLit", QPainter::CompositionMode_HardLight},
+        {"vLit", Blend::VividLight},                    {"lLit", Blend::LinearLight},
+        {"pLit", Blend::PinLight},                      {"hMix", Blend::HardMix},
         {"diff", QPainter::CompositionMode_Difference}, {"smud", QPainter::CompositionMode_Exclusion},
-        {"lddg", QPainter::CompositionMode_Plus},
+        {"fsub", Blend::Subtract},                      {"fdiv", Blend::Divide},
+        {"hue ", Blend::Hue},                           {"sat ", Blend::Saturation},
+        {"colr", Blend::Color},                         {"lum ", Blend::Luminosity},
     };
     return keys;
 }
@@ -55,6 +64,8 @@ public:
     qint16 i16() { qint16 v = 0; m_in >> v; return v; }
     quint32 u32() { quint32 v = 0; m_in >> v; return v; }
     qint32 i32() { qint32 v = 0; m_in >> v; return v; }
+    qint64 i64() { qint64 v = 0; m_in >> v; return v; }
+    double f64() { double v = 0; m_in >> v; return v; }
     QByteArray bytes(qint64 n)
     {
         if (n < 0 || n > m_file.size() - m_file.pos())
@@ -203,6 +214,127 @@ struct ChannelInfo {
     quint32 length;
 };
 
+// Photoshop "descriptors": the nested key/value structures used for layer effects and
+// newer adjustment settings. Objects become QVariantMaps, lists QVariantLists, numbers doubles.
+class DescriptorParser {
+public:
+    explicit DescriptorParser(Reader &r) : m_r(r) {}
+
+    QVariantMap descriptor()
+    {
+        unicode();  // class name
+        QVariantMap map;
+        map.insert(QStringLiteral("_class"), id());
+        const quint32 count = m_r.u32();
+        for (quint32 k = 0; k < count; ++k) {
+            const QString key = id();
+            map.insert(key, value(m_r.bytes(4)));
+        }
+        return map;
+    }
+
+private:
+    QString unicode()
+    {
+        const quint32 n = m_r.u32();
+        if (n > 100000)
+            throw QObject::tr("Damaged descriptor.");
+        QString s;
+        for (quint32 k = 0; k < n; ++k)
+            s += QChar(m_r.u16());
+        while (s.endsWith(QChar(0)))
+            s.chop(1);
+        return s;
+    }
+
+    QString id()
+    {
+        const quint32 n = m_r.u32();
+        return QString::fromLatin1(m_r.bytes(n == 0 ? 4 : n));
+    }
+
+    QVariant value(const QByteArray &type)
+    {
+        if (type == "Objc" || type == "GlbO")
+            return descriptor();
+        if (type == "VlLs") {
+            QVariantList list;
+            const quint32 n = m_r.u32();
+            for (quint32 k = 0; k < n; ++k)
+                list << value(m_r.bytes(4));
+            return list;
+        }
+        if (type == "doub")
+            return m_r.f64();
+        if (type == "UntF") {
+            m_r.bytes(4);  // unit (#Pxl, #Prc, #Ang, ...)
+            return m_r.f64();
+        }
+        if (type == "UnFl") {
+            m_r.bytes(4);
+            const quint32 n = m_r.u32();
+            QVariantList list;
+            for (quint32 k = 0; k < n; ++k)
+                list << m_r.f64();
+            return list;
+        }
+        if (type == "TEXT")
+            return unicode();
+        if (type == "enum") {
+            id();  // enum type
+            return id();
+        }
+        if (type == "long")
+            return double(m_r.i32());
+        if (type == "comp")
+            return double(m_r.i64());
+        if (type == "bool")
+            return m_r.u8() != 0;
+        if (type == "type" || type == "GlbC") {
+            unicode();
+            return id();
+        }
+        if (type == "alis" || type == "tdta" || type == "Pth ")
+            return m_r.bytes(m_r.u32());
+        if (type == "obj ") {
+            reference();
+            return QVariant();
+        }
+        throw QObject::tr("Unsupported descriptor value '%1'.").arg(QString::fromLatin1(type));
+    }
+
+    void reference()
+    {
+        const quint32 n = m_r.u32();
+        for (quint32 k = 0; k < n; ++k) {
+            const QByteArray form = m_r.bytes(4);
+            if (form == "prop") { unicode(); id(); id(); }
+            else if (form == "Clss") { unicode(); id(); }
+            else if (form == "Enmr") { unicode(); id(); id(); id(); }
+            else if (form == "rele") { unicode(); id(); m_r.u32(); }
+            else if (form == "Idnt" || form == "indx") { m_r.u32(); }
+            else if (form == "name") { unicode(); id(); unicode(); }
+            else throw QObject::tr("Unsupported descriptor reference.");
+        }
+    }
+
+    Reader &m_r;
+};
+
+double num(const QVariantMap &m, const char *key, double fallback = 0)
+{
+    const QVariant v = m.value(QString::fromLatin1(key));
+    return v.isValid() ? v.toDouble() : fallback;
+}
+
+QColor descriptorColor(const QVariantMap &m)
+{
+    const QVariantMap c = m.value(QStringLiteral("Clr ")).toMap();
+    if (c.contains(QStringLiteral("redFloat")))
+        return QColor::fromRgbF(num(c, "redFloat"), num(c, "greenFloat"), num(c, "blueFloat"));
+    return QColor(qRound(num(c, "Rd  ")), qRound(num(c, "Grn ")), qRound(num(c, "Bl  ")));
+}
+
 struct LayerRecord {
     QRect rect;
     QList<ChannelInfo> channels;
@@ -214,7 +346,257 @@ struct LayerRecord {
     int maskDefault = 255;
     bool maskDisabled = false;
     int sectionType = 0;  // 1/2: group start, 3: group end marker
+    QByteArray sectionBlendKey;
+    bool clipped = false;
+    int fillOpacity = 255;
+    Adjustment adjustment;
+    QColor fillColor;       // solid color fill layer
+    QVariantMap effects;    // layer effects descriptor
+    QString unsupported;    // name of an adjustment PairPaint can't apply
+    QString fillWithoutPixelsNote;
+    QString approximate;     // supported, but rendered approximately
+    QPainterPath vectorMask;  // in document pixels; empty if none
+    bool vectorMaskInverted = false;
 };
+
+// A vector mask: Bezier paths, stored as 26-byte records with coordinates relative to the
+// document size. Returns the path in units of the document (0..1), filled = visible.
+QPainterPath readVectorMask(Reader &r, qint64 end)
+{
+    r.u32();  // version
+    const quint32 flags = r.u32();
+    QPainterPath path;
+    if (flags & 4)
+        return path;  // disabled
+    struct Knot {
+        QPointF before, anchor, after;
+    };
+    auto point = [&] {
+        const double y = r.i32() / 16777216.0, x = r.i32() / 16777216.0;  // fixed point 8.24
+        return QPointF(x, y);
+    };
+    QList<Knot> knots;
+    bool closed = false;
+    int remaining = 0;
+    auto flush = [&] {
+        if (knots.isEmpty())
+            return;
+        path.moveTo(knots[0].anchor);
+        for (int k = 1; k < knots.size(); ++k)
+            path.cubicTo(knots[k - 1].after, knots[k].before, knots[k].anchor);
+        if (closed) {
+            path.cubicTo(knots.last().after, knots[0].before, knots[0].anchor);
+            path.closeSubpath();
+        }
+        knots.clear();
+    };
+    while (r.pos() + 26 <= end) {
+        const qint64 next = r.pos() + 26;
+        const int selector = r.u16();
+        if (selector == 0 || selector == 3) {  // start of a closed / open subpath
+            flush();
+            closed = selector == 0;
+            remaining = r.u16();
+        } else if ((selector == 1 || selector == 2 || selector == 4 || selector == 5) && remaining > 0) {
+            Knot k;
+            k.before = point();
+            k.anchor = point();
+            k.after = point();
+            knots << k;
+            --remaining;
+        } else if (selector == 8) {
+            if (r.u16() == 1)
+                path.setFillRule(Qt::OddEvenFill);  // initial fill rule: everything visible...
+        }
+        r.seek(next);
+    }
+    flush();
+    return path;
+}
+
+QImage vectorMaskImage(const QPainterPath &unitPath, bool inverted, const QSize &size)
+{
+    QImage mask(size, QImage::Format_ARGB32_Premultiplied);
+    mask.fill(inverted ? Qt::white : Qt::black);
+    QPainter p(&mask);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.scale(size.width(), size.height());
+    p.fillPath(unitPath, inverted ? Qt::black : Qt::white);
+    return mask;
+}
+
+// Photoshop adjustment layers that PairPaint can't apply (yet), by their data key.
+QString unsupportedAdjustmentName(const QByteArray &key)
+{
+    static const QList<QPair<QByteArray, const char *>> names = {
+        {"blnc", "Color Balance"}, {"selc", "Selective Color"}, {"mixr", "Channel Mixer"},
+        {"vibA", "Vibrance"},       {"grdm", "Gradient Map"},    {"phfl", "Photo Filter"},
+        {"expA", "Exposure"},       {"blwh", "Black & White"},   {"clrL", "Color Lookup"},
+    };
+    for (const auto &[k, n] : names)
+        if (k == key)
+            return QString::fromLatin1(n);
+    return {};
+}
+
+// Parses the data of one "additional layer information" block into the record.
+void readLayerInfo(Reader &r, const QByteArray &key, qint64 dataEnd, LayerRecord &rec)
+{
+    if (key == "luni") {
+        const quint32 n = r.u32();
+        QString name;
+        for (quint32 k = 0; k < n && r.pos() + 2 <= dataEnd; ++k)
+            name += QChar(r.u16());
+        if (!name.isEmpty())
+            rec.name = name;
+    } else if (key == "lsct" || key == "lsdk") {
+        rec.sectionType = int(r.u32());
+        if (r.pos() + 8 <= dataEnd && r.bytes(4) == "8BIM")
+            rec.sectionBlendKey = r.bytes(4);
+    } else if (key == "iOpa") {
+        rec.fillOpacity = r.u8();
+    } else if (key == "nvrt") {
+        rec.adjustment = {Adjustment::Invert, {}};
+    } else if (key == "post") {
+        rec.adjustment = {Adjustment::Posterize, {std::clamp(int(r.u16()), 2, 32)}};
+    } else if (key == "thrs") {
+        rec.adjustment = {Adjustment::Threshold, {std::clamp(int(r.u16()), 1, 255)}};
+    } else if (key == "brit") {
+        const int brightness = r.i16(), contrast = r.i16();
+        if (rec.adjustment.type != Adjustment::BrightnessContrast)  // CgEd (newer data) wins
+            rec.adjustment = {Adjustment::BrightnessContrast, {brightness, contrast, 1}};  // old files: legacy
+    } else if (key == "CgEd") {
+        r.u32();  // descriptor version
+        const QVariantMap d = DescriptorParser(r).descriptor();
+        const bool legacy = d.value(QStringLiteral("useLegacy")).toBool();
+        rec.adjustment = {Adjustment::BrightnessContrast, {qRound(num(d, "Brgh")), qRound(num(d, "Cntr")), legacy ? 1 : 0}};
+        if (!legacy)
+            rec.approximate = QStringLiteral("Brightness/Contrast (approximated)");
+    } else if (key == "levl") {
+        r.u16();  // version
+        // Records: all channels, then red, green, blue. Each: input black/white,
+        // output black/white, gamma x 100.
+        QList<int> params;
+        for (int c = 0; c < 4; ++c) {
+            const int inBlack = r.u16(), inWhite = r.u16(), outBlack = r.u16(), outWhite = r.u16(), gamma = r.u16();
+            params << std::clamp(inBlack, 0, 253) << std::clamp(inWhite, 2, 255) << std::clamp(gamma, 10, 999)
+                   << std::clamp(outBlack, 0, 255) << std::clamp(outWhite, 0, 255);
+        }
+        rec.adjustment = {Adjustment::Levels, params};
+    } else if (key == "curv") {
+        r.u8();   // padding
+        r.u16();  // version
+        const quint32 channels = r.u32();  // bit 0: all channels, bits 1-3: red, green, blue
+        QList<int> curves[4];
+        for (int c = 0; c < 32; ++c) {
+            if (!(channels & (1u << c)))
+                continue;
+            const int count = r.u16();
+            QList<int> points;
+            for (int k = 0; k < count && k < 64; ++k) {
+                const int out = r.u16(), in = r.u16();
+                points << in << out;
+            }
+            if (c < 4)
+                curves[c] = points;
+        }
+        QList<int> params = curves[0].size() >= 4 ? curves[0] : QList<int>{0, 0, 255, 255};
+        if (!curves[1].isEmpty() || !curves[2].isEmpty() || !curves[3].isEmpty()) {
+            params << -1;
+            for (int c = 1; c < 4; ++c) {
+                const QList<int> pts = curves[c].size() >= 4 ? curves[c] : QList<int>{0, 0, 255, 255};
+                params << int(pts.size() / 2) << pts;
+            }
+        }
+        rec.adjustment = {Adjustment::Curves, params};
+    } else if (key == "hue2") {
+        r.u16();                       // version
+        const bool colorize = r.u8();
+        r.u8();
+        r.i16(); r.i16(); r.i16();     // colorize settings
+        const int hue = r.i16(), saturation = r.i16(), lightness = r.i16();  // master
+        QList<int> params{hue, saturation, lightness};
+        for (int k = 0; k < 6 && r.pos() + 14 <= dataEnd; ++k) {  // Reds, Yellows, Greens, ...
+            const int a = r.u16(), b = r.u16(), c = r.u16(), d = r.u16();
+            const int h = r.i16(), s = r.i16(), l = r.i16();
+            if (h || s || l)
+                params << a << b << c << d << h << s << l;
+        }
+        if (colorize) {
+            rec.unsupported = QStringLiteral("Hue/Saturation (Colorize)");
+        } else {
+            rec.adjustment = {Adjustment::HueSaturation, params};
+            if (params.size() > 3)
+                rec.approximate = QStringLiteral("Hue/Saturation color ranges (approximated)");
+        }
+    } else if (key == "vmsk" || key == "vsms") {
+        rec.vectorMask = readVectorMask(r, dataEnd);
+    } else if (key == "GdFl" || key == "PtFl") {
+        // Photoshop normally also stores the fill's pixels; only warn if it didn't.
+        rec.fillWithoutPixelsNote = key == "GdFl" ? QStringLiteral("Gradient Fill") : QStringLiteral("Pattern Fill");
+    } else if (key == "SoCo") {
+        r.u32();
+        rec.fillColor = descriptorColor(DescriptorParser(r).descriptor());
+    } else if (key == "lfx2" || key == "lmfx") {
+        r.u32();  // object effects version
+        r.u32();  // descriptor version
+        rec.effects = DescriptorParser(r).descriptor();
+    } else {
+        const QString name = unsupportedAdjustmentName(key);
+        if (!name.isEmpty())
+            rec.unsupported = name;
+    }
+}
+
+// Maps Photoshop's drop shadow, outer glow and stroke to PairPaint's layer style.
+LayerStyle styleFromEffects(const QVariantMap &fx, int globalAngle, QStringList *notes)
+{
+    LayerStyle st;
+    if (fx.isEmpty() || !fx.value(QStringLiteral("masterFXSwitch"), true).toBool())
+        return st;
+    // Newer files keep each kind of effect in a list ("dropShadowMulti"); older ones a single object.
+    auto effect = [&](const char *single, const char *multi) {
+        QVariantList candidates = fx.value(QString::fromLatin1(multi)).toList();
+        candidates << fx.value(QString::fromLatin1(single));
+        for (const QVariant &v : candidates) {
+            const QVariantMap m = v.toMap();
+            if (!m.isEmpty() && m.value(QStringLiteral("enab")).toBool())
+                return m;
+        }
+        return QVariantMap();
+    };
+    const QVariantMap shadow = effect("DrSh", "dropShadowMulti");
+    if (!shadow.isEmpty()) {
+        st.shadow = true;
+        st.shadowColor = descriptorColor(shadow);
+        st.shadowOpacity = qRound(num(shadow, "Opct", 75));
+        st.shadowAngle = shadow.value(QStringLiteral("uglg"), true).toBool() ? globalAngle : qRound(num(shadow, "lagl", 120));
+        st.shadowDistance = qRound(num(shadow, "Dstn", 5));
+        st.shadowSize = qRound(num(shadow, "blur", 5));
+    }
+    const QVariantMap glow = effect("OrGl", "outerGlowMulti");
+    if (!glow.isEmpty()) {
+        st.glow = true;
+        st.glowColor = descriptorColor(glow);
+        st.glowOpacity = qRound(num(glow, "Opct", 75));
+        st.glowSize = std::max(1, int(qRound(num(glow, "blur", 5))));
+    }
+    const QVariantMap stroke = effect("FrFX", "frameFXMulti");
+    if (!stroke.isEmpty()) {
+        st.stroke = true;
+        st.strokeColor = descriptorColor(stroke);
+        st.strokeOpacity = qRound(num(stroke, "Opct", 100));
+        st.strokeSize = std::max(1, int(qRound(num(stroke, "Sz  ", 3))));
+        if (stroke.value(QStringLiteral("Styl")).toString() != QLatin1String("OutF"))
+            *notes << QObject::tr("inside/center strokes (shown as outside strokes)");
+    }
+    static const char *others[] = {"IrSh", "IrGl", "ebbl", "ChFX", "SoFi", "GrFl", "patternFill",
+                                   "innerShadowMulti", "solidFillMulti", "gradientFillMulti"};
+    for (const char *k : others)
+        if (!effect(k, "").isEmpty())
+            *notes << QObject::tr("some layer effects (inner shadow/glow, bevel, satin, overlays)");
+    return st;
+}
 
 QRect readRect(Reader &r)
 {
@@ -222,7 +604,59 @@ QRect readRect(Reader &r)
     return QRect(left, top, right - left, bottom - top);
 }
 
-Document *readPsd(QFile &f)
+// Reads the merged (flattened) image Photoshop stores after the layers.
+QImage readMergedImage(Reader &r, qint64 offset, int channelCount, int width, int height, int depth, int colorMode)
+{
+    r.seek(offset);
+    const QSize size(width, height);
+    const int compression = r.u16();
+    QMap<int, QByteArray> planes;
+    const int used = std::min(channelCount, colorMode == 4 ? 5 : colorMode == 1 ? 2 : 4);
+    const int colorChannels = colorMode == 4 ? 4 : colorMode == 1 ? 1 : 3;
+    const int bpr = width * depth / 8;
+    if (compression == 1) {
+        QList<int> counts(channelCount * height);
+        for (int &c : counts)
+            c = r.u16();
+        for (int c = 0; c < channelCount; ++c) {
+            QByteArray plane;
+            for (int y = 0; y < height; ++y) {
+                const QByteArray row = r.bytes(counts[c * height + y]);
+                int pos = 0;
+                plane.append(unpackBits(row, pos, bpr));
+            }
+            if (c < used)
+                planes[c < colorChannels ? c : -1] = to8bit(plane, depth);
+        }
+    } else if (compression == 0) {
+        for (int c = 0; c < channelCount; ++c) {
+            const QByteArray plane = r.bytes(qint64(bpr) * height);
+            if (c < used)
+                planes[c < colorChannels ? c : -1] = to8bit(plane, depth);
+        }
+    } else {
+        throw QObject::tr("Unsupported compression of the merged image.");
+    }
+    r.check();
+    QImage img = assemble(planes, QRect(QPoint(0, 0), size), size, colorMode);
+    if (planes.contains(-1)) {
+        // Photoshop stores the merged colors blended with white where they are transparent;
+        // undo that so the colors are the real ones.
+        for (int y = 0; y < img.height(); ++y) {
+            QRgb *row = reinterpret_cast<QRgb *>(img.scanLine(y));
+            for (int x = 0; x < img.width(); ++x) {
+                const int a = qAlpha(row[x]);
+                if (a == 0 || a == 255)
+                    continue;
+                auto unmatte = [a](int c) { return std::clamp((c - (255 - a)) * 255 / a, 0, 255); };
+                row[x] = qRgba(unmatte(qRed(row[x])), unmatte(qGreen(row[x])), unmatte(qBlue(row[x])), a);
+            }
+        }
+    }
+    return img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
 {
     Reader r(f);
     if (r.bytes(4) != "8BPS")
@@ -247,9 +681,30 @@ Document *readPsd(QFile &f)
     const QSize size(width, height);
 
     r.skip(r.u32());  // color mode data
-    r.skip(r.u32());  // image resources
+    int globalAngle = 120;  // Photoshop's default lighting angle for effects
+    {
+        const quint32 len = r.u32();
+        const qint64 end = r.pos() + len;
+        while (r.pos() + 12 <= end) {
+            if (r.bytes(4) != "8BIM")
+                break;
+            const int id = r.u16();
+            const int nameLen = r.u8();
+            r.skip(nameLen + ((nameLen + 1) % 2));  // Pascal string padded to even length
+            const quint32 size = r.u32();
+            const qint64 next = r.pos() + size + (size % 2);
+            if (id == 1037 && size >= 4)  // global light angle
+                globalAngle = r.i32();
+            r.seek(next);
+        }
+        r.seek(end);
+    }
     const quint32 layerMaskLen = r.u32();
     const qint64 layerMaskEnd = r.pos() + layerMaskLen;
+    if (mergedOnly) {
+        *mergedOnly = readMergedImage(r, layerMaskEnd, channelCount, width, height, depth, colorMode);
+        return nullptr;
+    }
 
     DocState state;
     state.size = size;
@@ -270,7 +725,7 @@ Document *readPsd(QFile &f)
                 r.bytes(4);  // "8BIM"
                 rec.blendKey = r.bytes(4);
                 rec.opacity = r.u8();
-                r.u8();  // clipping
+                rec.clipped = r.u8() != 0;
                 rec.flags = r.u8();
                 r.u8();  // filler
                 const quint32 extraLen = r.u32();
@@ -296,15 +751,10 @@ Document *readPsd(QFile &f)
                     const QByteArray key = r.bytes(4);
                     const quint32 len = r.u32();
                     const qint64 dataEnd = r.pos() + len;
-                    if (key == "luni") {
-                        const quint32 n = r.u32();
-                        QString name;
-                        for (quint32 k = 0; k < n && r.pos() + 2 <= dataEnd; ++k)
-                            name += QChar(r.u16());
-                        if (!name.isEmpty())
-                            rec.name = name;
-                    } else if (key == "lsct" || key == "lsdk") {
-                        rec.sectionType = int(r.u32());
+                    try {
+                        readLayerInfo(r, key, dataEnd, rec);
+                    } catch (const QString &) {
+                        // An unreadable block only loses that feature, not the whole file.
                     }
                     r.seek(dataEnd);
                 }
@@ -335,9 +785,26 @@ Document *readPsd(QFile &f)
                 }
                 l.name = rec.name.isEmpty() ? QObject::tr("Layer") : rec.name;
                 l.opacity = rec.opacity / 255.0;
+                l.fillOpacity = rec.fillOpacity / 255.0;
                 l.visible = !(rec.flags & 2);
-                l.mode = modeForKey(rec.blendKey);
+                l.clipped = rec.clipped && l.kind == LayerKind::Normal;
+                l.mode = modeForKey(l.isGroup() && !rec.sectionBlendKey.isEmpty() ? rec.sectionBlendKey : rec.blendKey);
                 l.image = assemble(planes, rec.rect, size, colorMode).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                if (rec.adjustment.type != Adjustment::None) {
+                    l.adjustment = rec.adjustment;
+                    l.image.fill(Qt::transparent);  // adjustment layers have no pixels of their own
+                } else if (rec.fillColor.isValid() && (!rec.vectorMask.isEmpty() || alphaBounds(l.image).isEmpty())) {
+                    // Solid color fill layers, including shape layers (a fill cut out by a vector
+                    // outline): rebuilt the way Photoshop renders them, so edges are exact.
+                    l.image.fill(rec.fillColor);
+                } else if (!rec.unsupported.isEmpty()) {
+                    notes << rec.unsupported;
+                } else if (!rec.fillWithoutPixelsNote.isEmpty() && alphaBounds(l.image).isEmpty()) {
+                    notes << rec.fillWithoutPixelsNote;
+                }
+                l.style = styleFromEffects(rec.effects, globalAngle, &notes);
+                if (!rec.approximate.isEmpty())
+                    notes << rec.approximate;
                 if (planes.contains(-2) && !rec.maskRect.isEmpty()) {
                     QImage mask(size, QImage::Format_ARGB32_Premultiplied);
                     mask.fill(QColor(rec.maskDefault, rec.maskDefault, rec.maskDefault));
@@ -355,6 +822,22 @@ Document *readPsd(QFile &f)
                     l.mask = mask;
                     l.maskEnabled = !rec.maskDisabled;
                 }
+                if (!rec.vectorMask.isEmpty()) {
+                    // Shape layers: the vector outline becomes (part of) the layer mask.
+                    const QImage vector = vectorMaskImage(rec.vectorMask, false, size);
+                    if (l.mask.isNull()) {
+                        l.mask = vector;
+                    } else {
+                        QPainter mp(&l.mask);
+                        mp.setCompositionMode(QPainter::CompositionMode_Multiply);
+                        mp.drawImage(0, 0, vector);
+                    }
+                    l.maskEnabled = true;
+                }
+                if (l.isAdjustment() && l.mask.isNull()) {
+                    l.mask = QImage(size, QImage::Format_ARGB32_Premultiplied);
+                    l.mask.fill(Qt::white);
+                }
                 state.layers.append(l);  // PSD stores layers bottom to top
             }
             r.check();
@@ -363,39 +846,9 @@ Document *readPsd(QFile &f)
 
     if (state.layers.isEmpty()) {
         // No layers: use the merged image data.
-        r.seek(layerMaskEnd);
-        const int compression = r.u16();
-        QMap<int, QByteArray> planes;
-        const int used = std::min(channelCount, colorMode == 4 ? 5 : colorMode == 1 ? 2 : 4);
-        const int colorChannels = colorMode == 4 ? 4 : colorMode == 1 ? 1 : 3;
-        const int bpr = width * depth / 8;
-        if (compression == 1) {
-            QList<int> counts(channelCount * height);
-            for (int &c : counts)
-                c = r.u16();
-            for (int c = 0; c < channelCount; ++c) {
-                QByteArray plane;
-                for (int y = 0; y < height; ++y) {
-                    const QByteArray row = r.bytes(counts[c * height + y]);
-                    int pos = 0;
-                    plane.append(unpackBits(row, pos, bpr));
-                }
-                if (c < used)
-                    planes[c < colorChannels ? c : -1] = to8bit(plane, depth);
-            }
-        } else if (compression == 0) {
-            for (int c = 0; c < channelCount; ++c) {
-                const QByteArray plane = r.bytes(qint64(bpr) * height);
-                if (c < used)
-                    planes[c < colorChannels ? c : -1] = to8bit(plane, depth);
-            }
-        } else {
-            throw QObject::tr("Unsupported compression of the merged image.");
-        }
-        r.check();
         Layer l;
         l.name = QObject::tr("Background");
-        l.image = assemble(planes, QRect(QPoint(0, 0), size), size, colorMode).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        l.image = readMergedImage(r, layerMaskEnd, channelCount, width, height, depth, colorMode);
         state.layers.append(l);
     }
     state.active = int(state.layers.size()) - 1;
@@ -484,7 +937,7 @@ QByteArray maskPlane(const QImage &mask)
 
 namespace Psd {
 
-Document *read(const QString &path, QString *error)
+Document *read(const QString &path, QString *error, QString *warning)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
@@ -492,10 +945,34 @@ Document *read(const QString &path, QString *error)
         return nullptr;
     }
     try {
-        return readPsd(f);
+        QStringList notes;
+        Document *doc = readPsd(f, notes);
+        notes.removeDuplicates();
+        if (warning && !notes.isEmpty())
+            *warning = QObject::tr("This file uses Photoshop features PairPaint can't reproduce yet, so it may look "
+                                   "different: %1.").arg(notes.join(QStringLiteral(", ")));
+        return doc;
     } catch (const QString &message) {
         *error = message;
         return nullptr;
+    }
+}
+
+QImage readComposite(const QString &path, QString *error)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        *error = f.errorString();
+        return {};
+    }
+    try {
+        QImage merged;
+        QStringList notes;
+        readPsd(f, notes, &merged);
+        return merged;
+    } catch (const QString &message) {
+        *error = message;
+        return {};
     }
 }
 
@@ -564,7 +1041,7 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
             li << qint16(id) << quint32(2 + data.size());
         li.writeRawData("8BIM", 4);
         li.writeRawData(keyForMode(l.mode).constData(), 4);
-        li << quint8(qRound(l.opacity * 255)) << quint8(0) << quint8(l.visible ? 0 : 2) << quint8(0);
+        li << quint8(qRound(l.opacity * 255)) << quint8(l.clipped ? 1 : 0) << quint8(l.visible ? 0 : 2) << quint8(0);
 
         QByteArray extra;
         QDataStream ex(&extra, QIODevice::WriteOnly);
@@ -592,6 +1069,11 @@ bool write(const Document *doc, const QString &path, QString *error, QString *wa
             ex << quint16(c.unicode());
         for (quint32 k = len; k < padded; ++k)
             ex << quint8(0);
+        if (l.fillOpacity < 1.0) {
+            ex.writeRawData("8BIM", 4);
+            ex.writeRawData("iOpa", 4);
+            ex << quint32(4) << quint8(qRound(l.fillOpacity * 255)) << quint8(0) << quint16(0);
+        }
         if (l.kind != LayerKind::Normal) {
             // Section divider: 1 = open group, 2 = closed group, 3 = end marker.
             ex.writeRawData("8BIM", 4);

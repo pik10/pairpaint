@@ -252,8 +252,10 @@ PreviewTarget adjustmentLayerTarget(Document *doc, int index, const QString &tit
 
     PreviewTarget t;
     t.canTogglePreview = false;
-    t.preview = [doc, index](const QList<int> &v) {
-        doc->layer(index).adjustment.params = v;
+    t.preview = [doc, index, st](const QList<int> &v) {
+        // The dialog edits the main settings; per-channel ones (e.g. from a PSD) are kept.
+        Adjustment &adj = doc->layer(index).adjustment;
+        adj.params = Adjustments::withMainParams(adj.type, st->original, v);
         doc->notifyImageChanged();
     };
     t.commit = [doc, st, title] {
