@@ -100,7 +100,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.12.*'
+          version: '6.11.*'  # aqtinstall can't install Qt 6.12 on Windows yet (miurahr/aqtinstall#1048)
           modules: qtimageformats
           cache: true
 
