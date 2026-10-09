@@ -51,6 +51,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.4" date="2026-10-09">
+      <description>
+        <p>Layers can no longer be lost by saving to the wrong format: quick edits of a JPEG or PNG still save straight back to it, images with layers are saved as projects, and flattened copies are made with Export.</p>
+      </description>
+    </release>
     <release version="0.7.3" date="2026-10-09">
       <description>
         <p>More reliable autosave and crash recovery, AVIF images open again, and fixes for guides.</p>

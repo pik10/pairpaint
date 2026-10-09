@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.4 — 2026-10-09
 
 ### Changed
 - **Layers can no longer be lost by saving to the wrong format.** Quick edits of a JPEG or PNG
