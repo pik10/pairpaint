@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-09
 
 ### New
 - **HEIC photos** (the default format of iPhone cameras) open on all systems, turned upright:
