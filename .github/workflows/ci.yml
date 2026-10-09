@@ -19,7 +19,8 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.12.*'
+          # Windows: aqtinstall can't install Qt 6.12 there yet (miurahr/aqtinstall#1048).
+          version: ${{ runner.os == 'Windows' && '6.11.*' || '6.12.*' }}
           modules: qtimageformats  # WebP, TIFF, and HEIC on macOS
           cache: true
 

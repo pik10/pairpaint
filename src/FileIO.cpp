@@ -378,10 +378,11 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
             *error = reader.errorString();
             return nullptr;
         }
-#ifdef Q_OS_MACOS
-        // Qt's macOS HEIF plugin already converts the pixels to sRGB but still labels them with
-        // the photo's own color space; converting again would oversaturate them. (The reader
-        // doesn't report the plugin's format, so the file is recognized by its contents.)
+#if defined(Q_OS_MACOS) && QT_VERSION < QT_VERSION_CHECK(6, 11, 0)
+        // Before Qt 6.11, Qt's macOS HEIF plugin already converted the pixels to sRGB but still
+        // labelled them with the photo's own color space; converting again would oversaturate
+        // them. (The reader doesn't report the plugin's format, so the file is recognized by its
+        // contents.) Qt 6.11 keeps the original pixels, labelled correctly.
         if (Heif::isHeif(path))
             img.setColorSpace(QColorSpace::SRgb);
 #endif
