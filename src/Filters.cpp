@@ -96,6 +96,58 @@ void hslToRgb(float h, float s, float l, int &r, int &g, int &b)
     b = int(std::lround(hueToRgb(p, q, h - 1 / 3.0f) * 255));
 }
 
+// Squared Euclidean distance transform, one dimension (Felzenszwalb & Huttenlocher).
+void distance1d(const double *f, double *d, int n, int *v, double *z)
+{
+    constexpr double inf = 1e20;
+    int k = 0;
+    v[0] = 0;
+    z[0] = -inf;
+    z[1] = inf;
+    for (int q = 1; q < n; ++q) {
+        double s = ((f[q] + double(q) * q) - (f[v[k]] + double(v[k]) * v[k])) / (2.0 * q - 2.0 * v[k]);
+        while (s <= z[k]) {
+            --k;
+            s = ((f[q] + double(q) * q) - (f[v[k]] + double(v[k]) * v[k])) / (2.0 * q - 2.0 * v[k]);
+        }
+        ++k;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = inf;
+    }
+    k = 0;
+    for (int q = 0; q < n; ++q) {
+        while (z[k + 1] < q)
+            ++k;
+        d[q] = double(q - v[k]) * (q - v[k]) + f[v[k]];
+    }
+}
+
+// Squared distance from every pixel to the nearest pixel where `feature` is true.
+std::vector<double> squaredDistance(const std::vector<char> &feature, int w, int h)
+{
+    std::vector<double> grid(size_t(w) * h);
+    for (size_t i = 0; i < grid.size(); ++i)
+        grid[i] = feature[i] ? 0.0 : 1e20;
+    parallelFor(w, [&](int x) {
+        std::vector<double> f(h), d(h), z(h + 1);
+        std::vector<int> v(h);
+        for (int y = 0; y < h; ++y)
+            f[y] = grid[size_t(y) * w + x];
+        distance1d(f.data(), d.data(), h, v.data(), z.data());
+        for (int y = 0; y < h; ++y)
+            grid[size_t(y) * w + x] = d[y];
+    });
+    parallelFor(h, [&](int y) {
+        std::vector<double> d(w), z(w + 1);
+        std::vector<int> v(w);
+        double *row = &grid[size_t(y) * w];
+        distance1d(row, d.data(), w, v.data(), z.data());
+        std::copy(d.begin(), d.end(), row);
+    });
+    return grid;
+}
+
 // Gaussian blur (three box passes) of an interleaved float buffer with 4 channels.
 void blurFloat(std::vector<float> &buf, int w, int h, double sigma)
 {
@@ -453,6 +505,72 @@ QImage heal(const QImage &source, const QImage &dest, const QImage &mask, double
         }
     }
     return out.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+QImage morphMask(const QImage &src, double radius)
+{
+    const QImage m = src.convertToFormat(QImage::Format_Alpha8);
+    const int w = m.width(), h = m.height();
+    std::vector<char> inside(size_t(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const uchar *row = m.constScanLine(y);
+        for (int x = 0; x < w; ++x)
+            inside[size_t(y) * w + x] = row[x] >= 128;
+    }
+    const bool grow = radius >= 0;
+    const double r = std::abs(radius);
+    std::vector<char> feature = inside;
+    if (!grow)
+        for (char &c : feature)
+            c = !c;
+    const std::vector<double> dist = squaredDistance(feature, w, h);
+
+    QImage out(m.size(), QImage::Format_Alpha8);
+    for (int y = 0; y < h; ++y) {
+        uchar *row = out.scanLine(y);
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * w + x;
+            const double d = std::sqrt(dist[i]);
+            double coverage;
+            // d is measured between pixel centres; the selection edge lies half a pixel
+            // from the outermost centre, so a pixel is fully covered when it is at
+            // least one pixel inside the new edge.
+            if (grow)
+                coverage = inside[i] ? 1.0 : r - d + 1.0;   // d = distance to the selection
+            else
+                coverage = inside[i] ? d - r : 0.0;         // d = distance to the outside
+            row[x] = uchar(std::lround(std::clamp(coverage, 0.0, 1.0) * 255));
+        }
+    }
+    return out;
+}
+
+QImage featherMask(const QImage &mask, double radius)
+{
+    // Alpha8 converts to black pixels carrying the mask as alpha, which blurs correctly.
+    return gaussianBlur(mask.convertToFormat(QImage::Format_ARGB32_Premultiplied), radius)
+        .convertToFormat(QImage::Format_Alpha8);
+}
+
+QImage colorRangeMask(const QImage &src, const QColor &color, int fuzziness)
+{
+    const QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    QImage out(img.size(), QImage::Format_Alpha8);
+    const int cr = color.red(), cg = color.green(), cb = color.blue();
+    const double full = fuzziness / 2.0, falloff = std::max(1.0, fuzziness / 2.0);
+    uchar *bits = out.bits();
+    const qsizetype bpl = out.bytesPerLine();
+    parallelFor(img.height(), [&](int y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        uchar *o = bits + y * bpl;
+        for (int x = 0; x < img.width(); ++x) {
+            const QRgb p = row[x];
+            const int dist = std::max({std::abs(qRed(p) - cr), std::abs(qGreen(p) - cg), std::abs(qBlue(p) - cb)});
+            const double c = std::clamp(1.0 - (dist - full) / falloff, 0.0, 1.0);  // fully selected up to fuzziness/2
+            o[x] = uchar(std::lround(c * qAlpha(p)));
+        }
+    });
+    return out;
 }
 
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous)

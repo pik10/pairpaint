@@ -25,6 +25,7 @@
 #include <QFontComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -43,6 +44,7 @@
 #include <QUndoView>
 #include <QVBoxLayout>
 #include <QtMath>
+#include <memory>
 
 namespace {
 
@@ -315,6 +317,38 @@ void MainWindow::createMenus()
     addAction(select, tr("&All"), QKeySequence::SelectAll, [this] { withDoc([](Document *d) { d->selectAll(); }); });
     addAction(select, tr("&Deselect"), QKeySequence("Ctrl+D"), [this] { withDoc([](Document *d) { d->deselect(); }); });
     addAction(select, tr("&Inverse"), QKeySequence("Ctrl+Shift+I"), [this] { withDoc([](Document *d) { d->invertSelection(); }); });
+    select->addSeparator();
+    addAction(select, tr("&Color Range…"), {}, [this] { colorRange(); });
+    addAction(select, tr("&Load Layer Transparency"), {}, [this] {
+        withDoc([](Document *d) { d->selectLayerTransparency(); });
+    });
+    QMenu *modify = select->addMenu(tr("&Modify"));
+    // Asks for a pixel amount, then applies `op` to the selection.
+    auto modifyAction = [this, modify](const QString &text, const QString &label, int def, const QKeySequence &key,
+                                       std::function<void(Document *, double)> op) {
+        addAction(modify, text, key, [this, text, label, def, op] {
+            withDoc([&](Document *d) {
+                if (!d->hasSelection()) {
+                    statusBar()->showMessage(tr("Make a selection first."), 3000);
+                    return;
+                }
+                bool ok = false;
+                const int v = QInputDialog::getInt(this, QString(text).remove(QLatin1Char('&')).remove(QStringLiteral("…")),
+                                                   label, def, 1, 500, 1, &ok);
+                if (ok) {
+                    QApplication::setOverrideCursor(Qt::WaitCursor);
+                    op(d, v);
+                    QApplication::restoreOverrideCursor();
+                }
+            });
+        });
+    };
+    modifyAction(tr("&Feather…"), tr("Feather radius (px):"), 5, QKeySequence("Shift+F6"),
+                 [](Document *d, double v) { d->featherSelection(v); });
+    modifyAction(tr("&Expand…"), tr("Expand by (px):"), 5, {}, [](Document *d, double v) { d->growSelection(v); });
+    modifyAction(tr("&Contract…"), tr("Contract by (px):"), 5, {}, [](Document *d, double v) { d->shrinkSelection(v); });
+    modifyAction(tr("&Border…"), tr("Border width (px):"), 10, {}, [](Document *d, double v) { d->borderSelection(v); });
+    modifyAction(tr("&Smooth…"), tr("Smooth radius (px):"), 5, {}, [](Document *d, double v) { d->smoothSelection(v); });
 
     // Filter
     QMenu *filter = menuBar()->addMenu(tr("Fil&ter"));
@@ -914,6 +948,32 @@ void MainWindow::canvasSize()
         SizeDialog dlg(tr("Canvas Size"), d->size(), true, this);
         if (dlg.exec() == QDialog::Accepted)
             d->resizeCanvas(dlg.newSize(), dlg.offset());
+    });
+}
+
+void MainWindow::colorRange()
+{
+    withDoc([&](Document *d) {
+        // Selects pixels close to the foreground color, previewing the selection live.
+        struct State {
+            DocState before;
+            QImage original;
+            QImage sample;
+        };
+        auto st = std::make_shared<State>();
+        st->before = d->state();
+        st->original = d->selection();
+        st->sample = d->flattened();
+        const QColor color = m_settings->foreground();
+        PreviewTarget target;
+        target.preview = [d, st, color](const QList<int> &v) {
+            d->setSelection(Filters::colorRangeMask(st->sample, color, v.value(0)));
+        };
+        target.commit = [d, st] { d->commit(tr("Color Range"), st->before); };
+        target.cancel = [d, st] { d->setSelection(st->original); };
+        FilterDialog dlg(tr("Color Range (foreground color %1)").arg(color.name()),
+                         new SliderEditor({{tr("Fuzziness"), 0, 255, 40, {}}}), target, this);
+        dlg.exec();
     });
 }
 

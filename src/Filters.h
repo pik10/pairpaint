@@ -36,4 +36,11 @@ QImage heal(const QImage &source, const QImage &dest, const QImage &mask, double
 // within `tolerance` (0..255 per channel). Returns a Format_Alpha8 mask.
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous);
 
+// Mask operations on Format_Alpha8 masks (selections).
+// Grows (radius > 0) or shrinks (radius < 0) a mask with round, anti-aliased edges.
+QImage morphMask(const QImage &mask, double radius);
+QImage featherMask(const QImage &mask, double radius);
+// Soft selection of pixels close to `color`; `fuzziness` 0..255.
+QImage colorRangeMask(const QImage &src, const QColor &color, int fuzziness);
+
 } // namespace Filters

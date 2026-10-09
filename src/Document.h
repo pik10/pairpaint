@@ -99,6 +99,12 @@ public:
     void selectAll();
     void deselect();
     void invertSelection();
+    void featherSelection(double radius);
+    void growSelection(double pixels);
+    void shrinkSelection(double pixels);
+    void borderSelection(double width);
+    void smoothSelection(double radius);
+    void selectLayerTransparency();
 
     // `modified` inside the selection, `original` outside it.
     QImage maskedBlend(const QImage &original, const QImage &modified) const;
@@ -166,6 +172,7 @@ private:
     void finish(const QString &text, const DocState &before, int changes = All, int mergeId = -1);
     void updateSelectionBounds();
     void syncEditTarget();
+    void modifySelection(const QString &text, const std::function<QImage(const QImage &)> &f);
 
     DocState m_state;
     QUndoStack m_undo;

@@ -3,6 +3,8 @@
 
 #include "Document.h"
 
+#include "Filters.h"
+
 #include <QFileInfo>
 #include <QFontMetricsF>
 #include <QTransform>
@@ -473,6 +475,65 @@ void Document::invertSelection()
     }
     m_state.selection = m;
     finish(tr("Inverse Selection"), before, Selection);
+}
+
+void Document::modifySelection(const QString &text, const std::function<QImage(const QImage &)> &f)
+{
+    if (!hasSelection())
+        return;
+    const DocState before = m_state;
+    m_state.selection = f(m_state.selection);
+    finish(text, before, Selection);
+}
+
+void Document::featherSelection(double radius)
+{
+    modifySelection(tr("Feather"), [radius](const QImage &m) { return Filters::featherMask(m, radius); });
+}
+
+void Document::growSelection(double pixels)
+{
+    modifySelection(tr("Expand Selection"), [pixels](const QImage &m) { return Filters::morphMask(m, pixels); });
+}
+
+void Document::shrinkSelection(double pixels)
+{
+    modifySelection(tr("Contract Selection"), [pixels](const QImage &m) { return Filters::morphMask(m, -pixels); });
+}
+
+void Document::borderSelection(double width)
+{
+    modifySelection(tr("Border"), [width](const QImage &m) {
+        QImage outer = Filters::morphMask(m, width / 2);
+        const QImage inner = Filters::morphMask(m, -width / 2);
+        QPainter p(&outer);
+        p.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+        p.drawImage(0, 0, inner);
+        return outer;
+    });
+}
+
+void Document::smoothSelection(double radius)
+{
+    // Blurring and re-thresholding rounds off corners and removes specks.
+    modifySelection(tr("Smooth Selection"), [radius](const QImage &m) {
+        QImage out = Filters::featherMask(m, radius);
+        for (int y = 0; y < out.height(); ++y) {
+            uchar *row = out.scanLine(y);
+            for (int x = 0; x < out.width(); ++x)
+                row[x] = uchar(std::clamp((row[x] - 128) * 4 + 128, 0, 255));
+        }
+        return out;
+    });
+}
+
+void Document::selectLayerTransparency()
+{
+    const Layer &l = activeLayer();
+    QImage part = l.image.copy();
+    if (!l.mask.isNull() && l.maskEnabled)
+        multiplyByMask(part, l.mask, rect());
+    selectMask(part.convertToFormat(QImage::Format_Alpha8), SelectionOp::Replace, tr("Load Selection"));
 }
 
 // ---------------------------------------------------------------------------

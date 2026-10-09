@@ -19,6 +19,7 @@
 #include <QApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPainterPath>
 #include <QStandardPaths>
 #include <QStyleFactory>
 #include <QTabWidget>
@@ -49,6 +50,64 @@ static QAction *action(QWidget *w, const QString &text) {
 static QColor px(Document *d, int x, int y, int layer = -1) {
     const QImage &img = layer < 0 ? d->activeLayer().image : d->layer(layer).image;
     return img.pixelColor(x, y);
+}
+
+
+// Selection refinements on a plain document with known shapes.
+static void testSelections()
+{
+    Document d(QSize(200, 200), Qt::white);
+    QPainterPath sq;
+    sq.addRect(50, 50, 100, 100);
+    d.selectPath(sq, SelectionOp::Replace, false, "Select");
+    CHECK(d.selectionBounds() == QRect(50, 50, 100, 100));
+
+    d.growSelection(10);
+    CHECK(d.selectionBounds() == QRect(40, 40, 120, 120));
+    CHECK(d.selection().constScanLine(45)[100] == 255);   // edge midpoint grown fully
+    CHECK(d.selection().constScanLine(42)[42] < 128);     // corner stays rounded, not square
+    d.undoStack()->undo();
+
+    d.shrinkSelection(10);
+    CHECK(d.selectionBounds() == QRect(60, 60, 80, 80));
+    d.undoStack()->undo();
+
+    d.borderSelection(10);
+    CHECK(d.selection().constScanLine(100)[100] == 0);    // centre is not part of the border
+    CHECK(d.selection().constScanLine(100)[50] == 255);   // the original edge is
+    CHECK(d.selection().constScanLine(100)[45] > 0 && d.selection().constScanLine(100)[54] > 0);  // 5 px each side
+    CHECK(d.selection().constScanLine(100)[43] == 0 && d.selection().constScanLine(100)[56] == 0);
+    d.undoStack()->undo();
+
+    d.featherSelection(8);
+    const int edge = d.selection().constScanLine(100)[50];
+    CHECK(edge > 60 && edge < 200);                        // soft edge
+    CHECK(d.selection().constScanLine(100)[100] == 255);
+    d.undoStack()->undo();
+
+    d.smoothSelection(6);
+    CHECK(d.selection().constScanLine(100)[100] == 255 && d.selection().constScanLine(51)[51] < 128);
+    d.undoStack()->undo();
+    CHECK(d.selectionBounds() == QRect(50, 50, 100, 100));  // undo restores the original
+
+    // Color range selects the red patch softly and nothing else
+    QPainter p(&d.layer(0).image);
+    p.fillRect(10, 10, 30, 30, QColor(255, 0, 0));
+    p.fillRect(150, 10, 30, 30, QColor(235, 20, 20));   // near red
+    p.end();
+    const QImage range = Filters::colorRangeMask(d.flattened(), QColor(255, 0, 0), 60);
+    CHECK(range.constScanLine(20)[20] == 255);
+    CHECK(range.constScanLine(20)[160] == 255);          // within fuzziness/2
+    CHECK(range.constScanLine(100)[100] == 0);           // white is far away
+    CHECK(Filters::colorRangeMask(d.flattened(), QColor(255, 0, 0), 10).constScanLine(20)[160] == 0);
+
+    // Load layer transparency
+    d.addLayer();
+    QPainter lp(&d.activeLayer().image);
+    lp.fillRect(20, 120, 40, 30, Qt::blue);
+    lp.end();
+    d.selectLayerTransparency();
+    CHECK(d.selectionBounds() == QRect(20, 120, 40, 30));
 }
 
 int main(int argc, char **argv) {
@@ -406,6 +465,8 @@ int main(int argc, char **argv) {
         dlg2.show(); QTest::qWait(50); dlg2.reject();
         CHECK(d->layerCount() == before);
     }
+
+    testSelections();
 
     std::printf("\n%d failure(s)\n", fails);
     d->undoStack()->setClean();
