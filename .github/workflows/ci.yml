@@ -17,12 +17,17 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Qt
+        if: runner.os != 'Windows'
         uses: jurplel/install-qt-action@v4
         with:
-          # Windows: aqtinstall can't install Qt 6.12 there yet (miurahr/aqtinstall#1048).
-          version: ${{ runner.os == 'Windows' && '6.11.*' || '6.12.*' }}
+          version: '6.12.*'
           modules: qtimageformats  # WebP, TIFF, and HEIC on macOS
           cache: true
+
+      # aqtinstall (used above) can't read Qt's Windows repository from 6.11 on yet.
+      - name: Install Qt (Windows)
+        if: runner.os == 'Windows'
+        run: python .github/scripts/install-qt-windows.py 6.12.0 "${{ runner.temp }}/Qt" qtimageformats
 
       - name: Install libheif (HEIC photos)
         if: runner.os == 'Linux'

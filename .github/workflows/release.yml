@@ -97,12 +97,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # aqtinstall (behind install-qt-action) can't read Qt's Windows repository from 6.11 on yet.
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.11.*'  # aqtinstall can't install Qt 6.12 on Windows yet (miurahr/aqtinstall#1048)
-          modules: qtimageformats
-          cache: true
+        run: python .github/scripts/install-qt-windows.py 6.12.0 "${{ runner.temp }}/Qt" qtimageformats
 
       - name: Version
         shell: bash
