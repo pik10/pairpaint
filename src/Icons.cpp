@@ -89,6 +89,46 @@ QIcon toolIcon(Tool::Id id)
         p.drawEllipse(QPointF(32, 30), 7, 7);
         p.drawRoundedRect(QRectF(22, 50, 20, 10), 4, 4);
         break;
+    case Tool::PolyLasso:
+        p.setPen(dashed);
+        p.drawPolygon(QPolygon({QPoint(10, 46), QPoint(20, 12), QPoint(46, 8), QPoint(56, 34), QPoint(34, 54)}));
+        break;
+    case Tool::SpotHealing:
+        // A bandage with a small sparkle: healing without a source.
+        p.save();
+        p.translate(28, 36);
+        p.rotate(-45);
+        p.drawRoundedRect(QRectF(-24, -9, 48, 18), 9, 9);
+        p.fillRect(QRectF(-8, -9, 16, 18), ink);
+        p.restore();
+        p.setPen(QPen(ink, 3, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(52, 6, 52, 20);
+        p.drawLine(45, 13, 59, 13);
+        break;
+    case Tool::Blur: {
+        // A water drop.
+        QPainterPath drop(QPointF(32, 6));
+        drop.cubicTo(44, 24, 50, 32, 50, 40);
+        drop.cubicTo(50, 52, 42, 58, 32, 58);
+        drop.cubicTo(22, 58, 14, 52, 14, 40);
+        drop.cubicTo(14, 32, 20, 24, 32, 6);
+        p.drawPath(drop);
+        break;
+    }
+    case Tool::Sharpen: {
+        // A sharp triangle (a cone seen from the side).
+        p.setBrush(ink);
+        p.drawPolygon(QPolygon({QPoint(32, 6), QPoint(52, 56), QPoint(12, 56)}));
+        break;
+    }
+    case Tool::Sponge:
+        // A sponge with holes.
+        p.drawRoundedRect(QRectF(10, 18, 44, 30), 8, 8);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        for (const QPointF &c : {QPointF(22, 28), QPointF(36, 26), QPointF(44, 38), QPointF(28, 40)})
+            p.drawEllipse(c, 3.5, 3.5);
+        break;
     case Tool::RectSelect:
         p.setPen(dashed);
         p.drawRect(10, 14, 44, 36);

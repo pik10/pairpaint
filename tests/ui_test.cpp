@@ -27,6 +27,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QtMath>
 #include <QTreeWidget>
 #include <cstdio>
 
@@ -568,6 +569,156 @@ static void testOnCanvasText(MainWindow &w, ToolManager *tools, ToolSettings *se
     tools->setCurrent(Tool::Brush);
 }
 
+
+// Spot Healing, Polygonal Lasso, Crop ratio/straighten, Blur, Sharpen and Sponge.
+static void testToolPack(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    auto newDoc = [&](const QImage &img) {
+        w.addDocument(new Document(img));
+        auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+        c->fitToWindow();
+        return c;
+    };
+    auto click = [](Canvas *c, QPointF imagePos) {
+        const QPointF wp = c->mapFromImage(imagePos);
+        mouse(c, QEvent::MouseButtonPress, wp, Qt::LeftButton, Qt::LeftButton);
+        mouse(c, QEvent::MouseButtonRelease, wp, Qt::LeftButton, Qt::NoButton);
+    };
+    auto key = [](Canvas *c, int k) { QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier); QApplication::sendEvent(c, &e); };
+    settings->hardness = 100;
+    settings->opacity = 100;
+    settings->pressureSize = false;
+
+    // --- Spot Healing: a dark spot on a gradient vanishes without choosing a source
+    {
+        QImage img(240, 120, QImage::Format_ARGB32_Premultiplied);
+        for (int x = 0; x < img.width(); ++x)
+            for (int y = 0; y < img.height(); ++y)
+                img.setPixelColor(x, y, QColor(60 + x / 2, 60 + x / 2, 60 + x / 2));
+        QPainter p(&img);
+        p.setBrush(Qt::black);
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(QPointF(120, 60), 6, 6);
+        p.end();
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        tools->setCurrent(Tool::SpotHealing);
+        settings->size = 24;
+        drag(c, {118, 60}, {122, 60});
+        const int expected = 60 + 120 / 2, got = d->layer(0).image.pixelColor(120, 60).red();
+        std::printf("     spot heal: centre %d (background there: %d)\n", got, expected);
+        CHECK(std::abs(got - expected) <= 12);
+        CHECK(d->layer(0).image.pixelColor(20, 60).red() == 70);   // untouched elsewhere
+        CHECK(d->undoStack()->undoText() == "Spot Healing Brush");
+    }
+
+    // --- Polygonal Lasso
+    {
+        QImage img(200, 120, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::white);
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        tools->setCurrent(Tool::PolyLasso);
+        click(c, {20, 20});
+        click(c, {150, 20});
+        click(c, {80, 50});
+        key(c, Qt::Key_Backspace);                  // remove the last point
+        click(c, {150, 100});
+        CHECK(!d->hasSelection());                  // still open
+        click(c, {20, 20});                         // clicking the first point closes it
+        CHECK(d->hasSelection());
+        const QRect b = d->selectionBounds();
+        CHECK(std::abs(b.left() - 20) <= 1 && std::abs(b.right() - 150) <= 1 && std::abs(b.bottom() - 100) <= 1);
+        CHECK(d->selection().constScanLine(30)[140] > 128 && d->selection().constScanLine(90)[30] < 128);  // a triangle
+        d->deselect();
+        click(c, {10, 10});
+        click(c, {60, 10});
+        const QPointF wp = c->mapFromImage({60, 60});   // double-click closes too
+        mouse(c, QEvent::MouseButtonPress, wp, Qt::LeftButton, Qt::LeftButton);
+        mouse(c, QEvent::MouseButtonRelease, wp, Qt::LeftButton, Qt::NoButton);
+        QMouseEvent dbl(QEvent::MouseButtonDblClick, wp, c->mapToGlobal(wp), Qt::LeftButton, Qt::LeftButton, {});
+        QApplication::sendEvent(c, &dbl);
+        mouse(c, QEvent::MouseButtonRelease, wp, Qt::LeftButton, Qt::NoButton);
+        CHECK(d->hasSelection() && d->selectionBounds().width() > 45 && d->selectionBounds().height() > 45);
+        click(c, {100, 100});
+        key(c, Qt::Key_Escape);                     // Esc abandons a polygon in progress
+        CHECK(d->selectionBounds().width() < 60);
+        tools->setCurrent(Tool::Brush);
+    }
+
+    // --- Crop: fixed aspect ratio, and straightening
+    {
+        QImage img(200, 200, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::white);
+        QPainter p(&img);
+        p.setPen(QPen(Qt::black, 5));
+        const qreal a = qDegreesToRadians(10.0);
+        p.drawLine(QPointF(100 - 90 * std::cos(a), 100 - 90 * std::sin(a)), QPointF(100 + 90 * std::cos(a), 100 + 90 * std::sin(a)));
+        p.end();
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        tools->setCurrent(Tool::Crop);
+        settings->cropRatio = 1.0;
+        drag(c, {10, 10}, {110, 60});               // a square, whatever the drag shape
+        key(c, Qt::Key_Return);
+        CHECK(d->size() == QSize(100, 100));
+        d->undoStack()->undo();
+        settings->cropRatio = 0;
+        d->cropRotated(QPointF(100, 100), QSize(120, 60), 10);  // the tilted line comes out level
+        CHECK(d->size() == QSize(120, 60));
+        const QImage out = d->layer(0).image;
+        CHECK(out.pixelColor(10, 30).red() < 80 && out.pixelColor(60, 30).red() < 80 && out.pixelColor(110, 30).red() < 80);
+        CHECK(out.pixelColor(60, 10).red() > 200 && out.pixelColor(60, 50).red() > 200);
+        d->undoStack()->undo();
+        drag(c, {50, 70}, {150, 130});              // a frame...
+        drag(c, {170, 100}, {165, 130});            // ...rotated by dragging outside it
+        key(c, Qt::Key_Return);
+        CHECK(d->size() == QSize(100, 60) && d->undoStack()->undoText() == "Crop");
+        tools->setCurrent(Tool::Brush);
+    }
+
+    // --- Blur, Sharpen and Sponge
+    {
+        QImage img(200, 120, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::white);
+        QPainter p(&img);
+        p.fillRect(0, 0, 100, 120, Qt::black);
+        p.end();
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        settings->size = 20;
+        tools->setCurrent(Tool::Blur);
+        drag(c, {100, 20}, {100, 100});
+        const int edge = d->layer(0).image.pixelColor(100, 60).red();
+        CHECK(edge > 30 && edge < 225);                                     // the edge got soft
+        CHECK(d->layer(0).image.pixelColor(30, 60).red() == 0 && d->layer(0).image.pixelColor(170, 60).red() == 255);
+        d->undoStack()->undo();
+
+        d->applyToActive("soften", [](const QImage &i) { return Filters::gaussianBlur(i, 3); });
+        const int before = d->layer(0).image.pixelColor(97, 60).red();
+        tools->setCurrent(Tool::Sharpen);
+        drag(c, {100, 20}, {100, 100});
+        CHECK(d->layer(0).image.pixelColor(97, 60).red() < before - 5);    // dark side got darker
+
+        QImage colour(100, 60, QImage::Format_ARGB32_Premultiplied);
+        colour.fill(QColor(200, 80, 80));
+        Canvas *c2 = newDoc(colour);
+        Document *d2 = c2->document();
+        tools->setCurrent(Tool::Sponge);
+        settings->spongeSaturate = false;
+        drag(c2, {20, 30}, {80, 30});
+        const QColor less = d2->layer(0).image.pixelColor(50, 30);
+        CHECK(less.red() - less.green() < 100);                              // less saturated
+        settings->spongeSaturate = true;
+        drag(c2, {20, 30}, {80, 30});
+        const QColor more = d2->layer(0).image.pixelColor(50, 30);
+        CHECK(more.red() - more.green() > less.red() - less.green());        // saturation back up
+        settings->spongeSaturate = false;
+        tools->setCurrent(Tool::Brush);
+    }
+    settings->pressureSize = true;
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -930,6 +1081,7 @@ int main(int argc, char **argv) {
     testGroups(w, tools, settings);
     testBlendingAndClipping();
     testOnCanvasText(w, tools, settings);
+    testToolPack(w, tools, settings);
     testPhotoshopFiles();
     {
         // Regression: destroying a window with unsaved changes used to crash.

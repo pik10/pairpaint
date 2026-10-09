@@ -41,9 +41,9 @@ You can also [build from source](#building).
 - **Text on the canvas**: click and type directly on the image; click existing text to edit it in place
   (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
   editable when moved, and become pixels only when painted on
-- **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Magic Wand,
-  Crop, Eyedropper, Brush, Eraser, Clone Stamp, Healing Brush, Smudge, Dodge, Burn, Paint Bucket,
-  Gradient (linear/radial),
+- **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Polygonal
+  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Eraser, Clone Stamp, Spot Healing
+  Brush, Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)
 - **Selections**: pixel masks with anti-aliasing, add / subtract / intersect, invert, marching ants;
@@ -82,13 +82,14 @@ cmake --build build -j
 |---|---|---|---|---|
 | Move / Free Transform | V / Ctrl+T | | Swap / reset colors | X / D |
 | Rect / Ellipse marquee | M / Shift+M | | Brush size | [ / ] |
-| Lasso | L | | Pan (temporary) | hold Space |
+| Lasso / Polygonal Lasso | L / Shift+L | | Pan (temporary) | hold Space |
 | Magic Wand | W | | Zoom | Ctrl+wheel, Ctrl +/-, Ctrl+0 fit, Ctrl+1 100% |
 | Crop | C | | Select all / deselect / inverse | Ctrl+A / Ctrl+D / Ctrl+Shift+I |
 | Eyedropper | I | | New layer / duplicate / merge | Ctrl+Shift+N / Ctrl+J / Ctrl+E |
 | Brush / Eraser | B / E | | Fill fg / bg | Alt+Backspace / Ctrl+Backspace |
-| Clone Stamp / Healing | S / J | | Levels / Curves | Ctrl+L / Ctrl+M |
-| Smudge / Dodge / Burn | R / O / Shift+O | | Group / ungroup layers | Ctrl+G / Ctrl+Shift+G |
+| Clone Stamp | S | | Levels / Curves | Ctrl+L / Ctrl+M |
+| Spot Healing / Healing | J / Shift+J | | Group / ungroup layers | Ctrl+G / Ctrl+Shift+G |
+| Smudge / Blur / Dodge / Burn | R / Shift+R / O / Shift+O | | | |
 | | | | Feather selection | Shift+F6 |
 | | | | Create / release clipping mask | Ctrl+Alt+G |
 | | | | Toggle editing mask / layer | Ctrl+\\ |

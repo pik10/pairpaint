@@ -200,6 +200,8 @@ public:
     void rotate(int degrees);
     void flip(Qt::Orientation orientation);
     void crop(const QRect &r);
+    // Crops to a frame of `size` centered at `center`, rotated by `angle` degrees (straightening).
+    void cropRotated(const QPointF &center, const QSize &size, qreal angle);
 
     // Pixel operations on the edit target, limited to the selection (undoable)
     void applyToActive(const QString &text, const std::function<QImage(const QImage &)> &f);

@@ -1308,6 +1308,40 @@ void Document::crop(const QRect &r)
     finish(tr("Crop"), before);
 }
 
+void Document::cropRotated(const QPointF &center, const QSize &s, qreal angle)
+{
+    if (s.isEmpty())
+        return;
+    if (std::abs(angle) < 0.01) {
+        crop(QRect((center - QPointF(s.width(), s.height()) / 2).toPoint(), s));
+        return;
+    }
+    const DocState before = m_state;
+    // Maps the old image into the new one: frame center to the middle, rotated back upright.
+    QTransform t;
+    t.translate(s.width() / 2.0, s.height() / 2.0);
+    t.rotate(-angle);
+    t.translate(-center.x(), -center.y());
+    auto render = [&](const QImage &img, const QColor &fill) {
+        QImage out = blankLayer(s, fill);
+        QPainter p(&out);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setTransform(t);
+        p.drawImage(0, 0, img);
+        return out;
+    };
+    for (Layer &l : m_state.layers) {
+        l.image = render(l.image, Qt::transparent);
+        if (!l.mask.isNull())
+            l.mask = render(l.mask, Qt::white);
+        l.text = TextData();  // rotated text becomes pixels
+    }
+    m_state.size = s;
+    m_state.selection = QImage();
+    finish(tr("Crop"), before);
+}
+
 // ---------------------------------------------------------------------------
 // Pixel operations
 

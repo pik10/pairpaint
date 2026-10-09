@@ -30,9 +30,9 @@ struct ToolEvent {
 class Tool {
 public:
     enum Id {
-        Move, Transform, RectSelect, EllipseSelect, Lasso, MagicWand, Crop, Eyedropper,
-        Brush, Eraser, CloneStamp, Healing, Smudge, Dodge, Burn, Fill, Gradient, LineShape, RectShape, EllipseShape,
-        Text, Hand, Zoom, Count
+        Move, Transform, RectSelect, EllipseSelect, Lasso, PolyLasso, MagicWand, Crop, Eyedropper,
+        Brush, Eraser, CloneStamp, SpotHealing, Healing, Smudge, Blur, Sharpen, Dodge, Burn, Sponge,
+        Fill, Gradient, LineShape, RectShape, EllipseShape, Text, Hand, Zoom, Count
     };
 
     explicit Tool(ToolSettings *settings) : m_settings(settings) {}

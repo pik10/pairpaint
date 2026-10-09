@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Spot Healing Brush** (J): paint over spots and blemishes; a matching patch nearby is found
+  automatically. The Healing Brush with a chosen source moves to Shift+J.
+- **Polygonal Lasso** (Shift+L): click corner points for straight-edged selections.
+- **Crop**: aspect ratio presets (1:1, 4:5, 3:2, 16:9, 9:16, original), move and resize the frame,
+  and drag outside it to straighten (rotate) the image.
+- **Blur** (Shift+R) and **Sharpen** brushes, and **Sponge** to saturate or desaturate.
+
 ## 0.2.0 — 2026-10-09
 
 ### New

@@ -56,13 +56,20 @@ QList<int> optionsForTool(int id)
 {
     using T = Tool;
     // Same order as MainWindow::Option.
-    enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range };
+    enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range,
+           Sponge, CropRatio };
     switch (id) {
     case T::Brush:
     case T::Eraser: return {Size, Hardness, Opacity, Pressure};
     case T::CloneStamp:
     case T::Healing: return {Size, Hardness, Opacity, SampleMerged, Pressure};
-    case T::Smudge: return {Size, Hardness, Opacity, Pressure};
+    case T::Smudge:
+    case T::Blur:
+    case T::Sharpen: return {Size, Hardness, Opacity, Pressure};
+    case T::SpotHealing: return {Size, Hardness, Pressure};
+    case T::Sponge: return {Size, Hardness, Sponge, Opacity, Pressure};
+    case T::Crop: return {CropRatio};
+    case T::PolyLasso: return {Antialias};
     case T::Dodge:
     case T::Burn: return {Size, Hardness, Range, Opacity, Pressure};
     case T::Fill: return {Tolerance, Contiguous, SampleMerged, Opacity};
@@ -473,7 +480,8 @@ void MainWindow::createToolBox()
         auto *a = new QAction(toolIcon(id), Tool::name(id), this);
         a->setCheckable(true);
         a->setShortcut(QKeySequence(Tool::shortcut(id)));
-        a->setToolTip(QStringLiteral("%1 (%2)").arg(Tool::name(id), Tool::shortcut(id)));
+        a->setToolTip(Tool::shortcut(id).isEmpty() ? Tool::name(id)
+                                                   : QStringLiteral("%1 (%2)").arg(Tool::name(id), Tool::shortcut(id)));
         a->setData(i);
         group->addAction(a);
         QMainWindow::addAction(a);  // keep the shortcut active
@@ -556,6 +564,24 @@ void MainWindow::createOptionsBar()
     range->setCurrentIndex(s->toneRange);
     connect(range, &QComboBox::currentIndexChanged, this, [s](int v) { s->toneRange = v; });
     m_optionActions[OptRange] = labelled(tr("Range:"), range);
+
+    auto *sponge = new QComboBox;
+    sponge->addItems({tr("Desaturate"), tr("Saturate")});
+    connect(sponge, &QComboBox::currentIndexChanged, this, [s](int v) { s->spongeSaturate = v == 1; });
+    m_optionActions[OptSponge] = labelled(tr("Mode:"), sponge);
+
+    auto *ratio = new QComboBox;
+    const QList<QPair<QString, double>> ratios = {
+        {tr("Free"), 0}, {tr("Original"), -1}, {tr("1:1 (square)"), 1}, {tr("4:5 (portrait)"), 0.8},
+        {tr("3:2 (photo)"), 1.5}, {tr("16:9 (widescreen)"), 16.0 / 9}, {tr("9:16 (story)"), 9.0 / 16},
+    };
+    for (const auto &[label, value] : ratios)
+        ratio->addItem(label, value);
+    connect(ratio, &QComboBox::currentIndexChanged, this, [this, s, ratio](int i) {
+        s->cropRatio = ratio->itemData(i).toDouble();
+        m_tools->current()->settingsChanged();
+    });
+    m_optionActions[OptCropRatio] = labelled(tr("Ratio:"), ratio);
 
     auto *pressureHolder = new QWidget;
     auto *pl = new QHBoxLayout(pressureHolder);
@@ -701,9 +727,10 @@ void MainWindow::onToolChanged(int id)
         if (m_optionActions[i])
             m_optionActions[i]->setVisible(opts.contains(i));
     // The opacity option means "exposure" for Dodge/Burn and "strength" for Smudge.
-    m_opacityLabel->setText(id == Tool::Dodge || id == Tool::Burn ? tr("Exposure:")
-                            : id == Tool::Smudge                 ? tr("Strength:")
-                                                                 : tr("Opacity:"));
+    m_opacityLabel->setText(id == Tool::Dodge || id == Tool::Burn                       ? tr("Exposure:")
+                            : id == Tool::Smudge || id == Tool::Blur || id == Tool::Sharpen ? tr("Strength:")
+                            : id == Tool::Sponge                                          ? tr("Flow:")
+                                                                                          : tr("Opacity:"));
     m_toolNameLabel->setText(Tool::name(Tool::Id(id)));
     m_hintLabel->setText(Tool::hint(Tool::Id(id)));
     if (canvas())

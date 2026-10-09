@@ -21,6 +21,7 @@
 #include <QToolTip>
 #include <QtMath>
 #include <functional>
+#include <limits>
 
 namespace {
 
@@ -159,7 +160,7 @@ private:
 
 class BrushTool : public Tool {
 public:
-    enum Mode { Paint, Erase, Clone, Heal, SmudgeMode, DodgeMode, BurnMode };
+    enum Mode { Paint, Erase, Clone, Heal, SpotHeal, SmudgeMode, BlurMode, SharpenMode, DodgeMode, BurnMode, SpongeMode };
     BrushTool(ToolSettings *s, Mode mode) : Tool(s), m_mode(mode) {}
 
     Id id() const override
@@ -169,6 +170,10 @@ public:
         case Clone: return CloneStamp;
         case Heal: return Healing;
         case SmudgeMode: return Smudge;
+        case SpotHeal: return SpotHealing;
+        case BlurMode: return Blur;
+        case SharpenMode: return Sharpen;
+        case SpongeMode: return Sponge;
         case DodgeMode: return Dodge;
         case BurnMode: return Burn;
         default: return Brush;
@@ -263,7 +268,12 @@ private:
         if (!m_active)
             return;
         m_active = false;
-        if (m_mode == Heal)
+        if (m_mode == SpotHeal && !m_strokeRect.isEmpty()) {
+            // No source to pick: find a nearby patch whose surroundings look most alike.
+            m_source = m_base;
+            m_offset = findSpotSource();
+        }
+        if (m_mode == Heal || m_mode == SpotHeal)
             applyHealing();
         m_lastEnd = m_last;
         m_lastDoc = m_doc;
@@ -271,6 +281,68 @@ private:
         m_doc->notifyStructureChanged();
         m_before = DocState();
         m_base = m_buffer = m_source = m_sample = QImage();
+    }
+
+    // Spot healing: tries offsets around the stroke and returns the one whose surroundings
+    // best match the stroke's surroundings, staying inside the image.
+    QPoint findSpotSource() const
+    {
+        const int margin = std::max(8, m_settings->size);
+        const QRect area = m_strokeRect.adjusted(-margin, -margin, margin, margin) & m_doc->rect();
+        const QImage coverage = m_buffer.copy(area).convertToFormat(QImage::Format_Alpha8);
+        const int reach = std::max(m_strokeRect.width(), m_strokeRect.height()) + 4;
+        const int step = std::max(1, std::min(area.width(), area.height()) / 40);
+        QPoint best(reach, 0);
+        double bestScore = std::numeric_limits<double>::max();
+        for (double scale : {1.15, 1.6, 2.2}) {
+            for (int k = 0; k < 16; ++k) {
+                const double a = qDegreesToRadians(k * 22.5);
+                const QPoint o(qRound(std::cos(a) * reach * scale), qRound(std::sin(a) * reach * scale));
+                if (!m_doc->rect().contains(area.translated(o)))
+                    continue;
+                double score = 0;
+                for (int y = 0; y < area.height(); y += step) {
+                    const uchar *cov = coverage.constScanLine(y);
+                    const QRgb *d = reinterpret_cast<const QRgb *>(m_base.constScanLine(area.top() + y)) + area.left();
+                    const QRgb *src = reinterpret_cast<const QRgb *>(m_base.constScanLine(area.top() + y + o.y())) + area.left() + o.x();
+                    for (int x = 0; x < area.width(); x += step) {
+                        if (cov[x])
+                            continue;  // compare only the surroundings, not the blemish
+                        const int dr = qRed(d[x]) - qRed(src[x]), dg = qGreen(d[x]) - qGreen(src[x]), db = qBlue(d[x]) - qBlue(src[x]);
+                        score += dr * dr + dg * dg + db * db;
+                    }
+                }
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = o;
+                }
+            }
+        }
+        return best;
+    }
+
+    // The target's pixels in `r` with this tool's adjustment applied at full strength.
+    QImage adjustedRegion(const QRect &r) const
+    {
+        switch (m_mode) {
+        case DodgeMode:
+        case BurnMode:
+            return Filters::dodgeBurn(m_base.copy(r), m_mode == BurnMode, m_settings->toneRange);
+        case SpongeMode:
+            return Filters::hueSaturation(m_base.copy(r), 0, m_settings->spongeSaturate ? 60 : -60, 0);
+        case BlurMode:
+        case SharpenMode: {
+            const double sigma = std::max(1.5, m_settings->size * 0.06);
+            const int m = int(std::ceil(sigma * 3)) + 2;  // the filter needs pixels around the area
+            const QRect er = r.adjusted(-m, -m, m, m) & m_doc->rect();
+            const QImage around = m_base.copy(er);
+            const QImage filtered = m_mode == BlurMode ? Filters::gaussianBlur(around, sigma)
+                                                       : Filters::unsharpMask(around, 120, 1.5, 2);
+            return filtered.copy(r.translated(-er.topLeft()));
+        }
+        default:
+            return {};
+        }
     }
 
     // Replaces the cloned pixels with ones that blend into their surroundings.
@@ -470,9 +542,22 @@ private:
             return;
         m_strokeRect |= r;
         QImage stroke = selectionMasked(m_buffer.copy(r), m_doc, r);
-        if (m_mode == DodgeMode || m_mode == BurnMode) {
+        if (m_mode == SpotHeal && m_active) {
+            // While painting, show where the healing will happen as a dark tint.
+            QPainter p(&m_doc->targetImage());
+            p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.drawImage(r.topLeft(), m_base, r);
+            p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            p.setOpacity(0.4);
+            p.drawImage(r.topLeft(), stroke);
+            p.end();
+            m_doc->notifyImageChanged(r);
+            return;
+        }
+        if (m_mode == DodgeMode || m_mode == BurnMode || m_mode == BlurMode || m_mode == SharpenMode
+            || m_mode == SpongeMode) {
             // The adjusted pixels, revealed where the stroke has coverage.
-            QImage adjusted = Filters::dodgeBurn(m_base.copy(r), m_mode == BurnMode, m_settings->toneRange);
+            QImage adjusted = adjustedRegion(r);
             QPainter q(&adjusted);
             q.setCompositionMode(QPainter::CompositionMode_DestinationIn);
             q.drawImage(0, 0, stroke);
@@ -709,6 +794,119 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+
+// Click corner points; double-click, click the first point or press Enter to close.
+class PolygonLassoTool : public Tool {
+public:
+    using Tool::Tool;
+    Id id() const override { return PolyLasso; }
+
+    void press(const ToolEvent &e) override
+    {
+        if (e.button != Qt::LeftButton)
+            return;
+        if (m_ignoreNextPress) {  // the press that follows a closing double-click
+            m_ignoreNextPress = false;
+            return;
+        }
+        if (!m_active) {
+            m_active = true;
+            m_op = selectionOp(e.modifiers);
+            m_points = QPolygonF{e.pos};
+        } else if (m_points.size() >= 3 && nearStart(e.widgetPos)) {
+            close();
+            return;
+        } else {
+            m_points << e.pos;
+        }
+        m_hover = e.pos;
+        m_canvas->update();
+    }
+
+    void move(const ToolEvent &e) override
+    {
+        m_hover = e.pos;
+        if (m_active)
+            m_canvas->update();
+    }
+
+    void doubleClick(const ToolEvent &) override
+    {
+        if (!m_active)
+            return;
+        close();
+        m_ignoreNextPress = true;
+    }
+
+    bool keyPress(QKeyEvent *e) override
+    {
+        if (!m_active)
+            return false;
+        switch (e->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            close();
+            return true;
+        case Qt::Key_Escape:
+            cancel();
+            m_canvas->update();
+            return true;
+        case Qt::Key_Backspace:
+            m_points.removeLast();
+            if (m_points.isEmpty())
+                m_active = false;
+            m_canvas->update();
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void cancel() override
+    {
+        m_active = false;
+        m_points.clear();
+    }
+
+    void paintOverlay(QPainter &p, const QTransform &t) override
+    {
+        if (!m_active)
+            return;
+        QPainterPath path;
+        path.addPolygon(t.map(m_points));
+        path.lineTo(t.map(m_hover));
+        drawOutline(p, path);
+        if (m_points.size() >= 3 && nearStart(t.map(m_hover))) {  // hint: clicking here closes
+            p.setPen(QPen(Qt::white, 1.5));
+            p.setBrush(QColor(42, 130, 218));
+            p.drawEllipse(t.map(m_points.first()), 5, 5);
+        }
+    }
+
+private:
+    bool nearStart(const QPointF &widgetPos) const
+    {
+        return QLineF(m_canvas->imageToWidget().map(m_points.first()), widgetPos).length() <= 8;
+    }
+
+    void close()
+    {
+        if (m_points.size() >= 3) {
+            QPainterPath path;
+            path.addPolygon(m_points);
+            path.closeSubpath();
+            m_doc->selectPath(path, m_op, m_settings->antialias, name(PolyLasso));
+        }
+        cancel();
+        m_canvas->update();
+    }
+
+    bool m_active = false;
+    bool m_ignoreNextPress = false;
+    SelectionOp m_op = SelectionOp::Replace;
+    QPolygonF m_points;
+    QPointF m_hover;
+};
 
 class MagicWandTool : public Tool {
 public:
@@ -1196,6 +1394,9 @@ private:
 
 // ---------------------------------------------------------------------------
 
+// Crop frame that can be moved (drag inside), resized (handles, keeping the chosen
+// aspect ratio) and rotated to straighten the image (drag outside).
+// Enter or double-click applies, Esc cancels.
 class CropTool : public Tool {
 public:
     using Tool::Tool;
@@ -1205,32 +1406,83 @@ public:
     {
         if (e.button != Qt::LeftButton)
             return;
-        if (m_rect.contains(e.pos))
-            return;  // clicking inside keeps the rectangle (double-click applies it)
-        m_drag = true;
-        m_start = e.pos;
-        m_rect = QRectF();
+        m_press = e.pos;
+        m_c0 = m_center;
+        m_w0 = m_w;
+        m_h0 = m_h;
+        m_a0 = m_angle;
+        if (!m_framed) {
+            m_drag = Create;
+            m_framed = true;
+            m_center = e.pos;
+            m_w = m_h = 0;
+            m_angle = 0;
+        } else if ((m_handle = handleAt(e.widgetPos)) >= 0) {
+            m_drag = Resize;
+        } else if (inside(e.pos)) {
+            m_drag = MoveFrame;
+        } else {
+            m_drag = Rotate;
+        }
     }
+
     void move(const ToolEvent &e) override
     {
-        if (!m_drag)
+        if (m_drag == None)
             return;
-        m_rect = QRectF(m_start, e.pos).normalized() & QRectF(m_doc->rect());
+        const double ratio = aspect();
+        if (m_drag == Create) {
+            QPointF d = e.pos - m_press;
+            if (ratio > 0) {  // keep the chosen shape
+                const double w = std::max(std::abs(d.x()), std::abs(d.y()) * ratio);
+                d = QPointF(d.x() < 0 ? -w : w, (d.y() < 0 ? -w : w) / ratio);
+            }
+            m_center = m_press + d / 2;
+            m_w = std::abs(d.x());
+            m_h = std::abs(d.y());
+        } else if (m_drag == MoveFrame) {
+            m_center = m_c0 + (e.pos - m_press);
+        } else if (m_drag == Rotate) {
+            const QPointF a = m_press - m_c0, b = e.pos - m_c0;
+            m_angle = m_a0 + qRadiansToDegrees(std::atan2(b.y(), b.x()) - std::atan2(a.y(), a.x()));
+        } else {
+            static const QPointF dirs[8] = {{-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}};
+            const QPointF dir = dirs[m_handle];
+            const QPointF local = rotated(e.pos - m_c0, -m_a0);
+            const QPointF anchor(-dir.x() * m_w0 / 2, -dir.y() * m_h0 / 2);
+            double w = dir.x() != 0 ? std::max(1.0, (local.x() - anchor.x()) * dir.x()) : m_w0;
+            double h = dir.y() != 0 ? std::max(1.0, (local.y() - anchor.y()) * dir.y()) : m_h0;
+            if (ratio > 0) {
+                if (dir.x() != 0 && dir.y() != 0)
+                    w = std::max(w, h * ratio);
+                else if (dir.y() != 0)
+                    w = h * ratio;
+                h = w / ratio;
+            }
+            const QPointF centerLocal(dir.x() != 0 ? anchor.x() + dir.x() * w / 2 : 0,
+                                      dir.y() != 0 ? anchor.y() + dir.y() * h / 2 : 0);
+            m_center = m_c0 + rotated(centerLocal, m_a0);
+            m_w = w;
+            m_h = h;
+        }
         m_canvas->update();
     }
+
     void release(const ToolEvent &e) override
     {
         if (e.button != Qt::LeftButton)
             return;
-        m_drag = false;
-        if (m_rect.width() < 1 || m_rect.height() < 1)
-            m_rect = QRectF();
+        if (m_drag == Create && (m_w < 2 || m_h < 2))
+            m_framed = false;
+        m_drag = None;
         m_canvas->update();
     }
+
     void doubleClick(const ToolEvent &) override { apply(); }
+
     bool keyPress(QKeyEvent *e) override
     {
-        if (m_rect.isEmpty())
+        if (!m_framed)
             return false;
         if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
             apply();
@@ -1243,53 +1495,109 @@ public:
         }
         return false;
     }
+
     void cancel() override
     {
-        m_drag = false;
-        m_rect = QRectF();
+        m_framed = false;
+        m_drag = None;
+    }
+
+    void settingsChanged() override
+    {
+        // A newly chosen aspect ratio reshapes the current frame around its center.
+        const double ratio = aspect();
+        if (m_framed && ratio > 0 && m_w > 0) {
+            m_h = m_w / ratio;
+            m_canvas->update();
+        }
     }
 
     void paintOverlay(QPainter &p, const QTransform &t) override
     {
-        if (m_rect.isEmpty())
+        if (!m_framed || m_w < 1 || m_h < 1)
             return;
-        const QRectF wr = t.mapRect(m_rect);
+        QPolygonF frame;
+        for (int i : {0, 2, 4, 6})
+            frame << t.map(handlePos(i));
         QPainterPath outside;
         outside.addRect(t.mapRect(QRectF(m_doc->rect())));
-        outside.addRect(wr);
+        outside.addPolygon(frame);
+        outside.closeSubpath();
         p.fillPath(outside, QColor(0, 0, 0, 150));
         p.setPen(QPen(QColor(255, 255, 255, 90), 1));
         for (int i = 1; i < 3; ++i) {  // rule of thirds
-            const qreal x = wr.left() + wr.width() * i / 3, y = wr.top() + wr.height() * i / 3;
-            p.drawLine(QPointF(x, wr.top()), QPointF(x, wr.bottom()));
-            p.drawLine(QPointF(wr.left(), y), QPointF(wr.right(), y));
+            const double f = i / 3.0;
+            p.drawLine(t.map(point(f, 0)), t.map(point(f, 1)));
+            p.drawLine(t.map(point(0, f)), t.map(point(1, f)));
         }
         p.setPen(QPen(Qt::white, 1));
         p.setBrush(Qt::NoBrush);
-        p.drawRect(wr);
-        if (!m_drag) {
-            const QString text = QObject::tr("%1 × %2 — Enter to crop, Esc to cancel")
-                                     .arg(qRound(m_rect.width())).arg(qRound(m_rect.height()));
+        p.drawPolygon(frame);
+        p.setBrush(Qt::white);
+        p.setPen(QPen(Qt::black, 1));
+        for (int i = 0; i < 8; ++i) {
+            const QPointF c = t.map(handlePos(i));
+            p.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
+        }
+        if (m_drag == None) {
+            QString text = QObject::tr("%1 × %2").arg(qRound(m_w)).arg(qRound(m_h));
+            if (std::abs(m_angle) >= 0.05)
+                text += QObject::tr(" · %1°").arg(m_angle, 0, 'f', 1);
+            text += QObject::tr(" — Enter to crop, Esc to cancel");
             p.setPen(Qt::white);
-            p.drawText(wr.bottomLeft() + QPointF(0, 16), text);
+            p.drawText(frame.boundingRect().bottomLeft() + QPointF(0, 18), text);
         }
     }
 
 private:
+    enum Drag { None, Create, MoveFrame, Resize, Rotate };
+
+    double aspect() const
+    {
+        return m_settings->cropRatio < 0 ? double(m_doc->size().width()) / m_doc->size().height() : m_settings->cropRatio;
+    }
+
+    // A point of the frame: fx, fy from 0 (left/top) to 1 (right/bottom).
+    QPointF point(double fx, double fy) const
+    {
+        return m_center + rotated(QPointF((fx - 0.5) * m_w, (fy - 0.5) * m_h), m_angle);
+    }
+
+    QPointF handlePos(int i) const
+    {
+        static const QPointF f[8] = {{0, 0}, {0.5, 0}, {1, 0}, {1, 0.5}, {1, 1}, {0.5, 1}, {0, 1}, {0, 0.5}};
+        return point(f[i].x(), f[i].y());
+    }
+
+    int handleAt(const QPointF &widgetPos) const
+    {
+        for (int i = 0; i < 8; ++i)
+            if (QLineF(m_canvas->imageToWidget().map(handlePos(i)), widgetPos).length() <= 8)
+                return i;
+        return -1;
+    }
+
+    bool inside(const QPointF &pos) const
+    {
+        const QPointF local = rotated(pos - m_center, -m_angle);
+        return std::abs(local.x()) <= m_w / 2 && std::abs(local.y()) <= m_h / 2;
+    }
+
     void apply()
     {
-        if (m_rect.isEmpty())
+        if (!m_framed || m_w < 1 || m_h < 1)
             return;
-        const QRect r(QPoint(qFloor(m_rect.left()), qFloor(m_rect.top())),
-                      QPoint(qCeil(m_rect.right()) - 1, qCeil(m_rect.bottom()) - 1));
-        m_rect = QRectF();
-        m_doc->crop(r);
+        m_framed = false;
+        m_doc->cropRotated(m_center, QSize(qRound(m_w), qRound(m_h)), m_angle);
         m_canvas->update();
     }
 
-    bool m_drag = false;
-    QPointF m_start;
-    QRectF m_rect;
+    bool m_framed = false;
+    Drag m_drag = None;
+    int m_handle = -1;
+    QPointF m_center, m_press, m_c0;
+    double m_w = 0, m_h = 0, m_angle = 0;
+    double m_w0 = 0, m_h0 = 0, m_a0 = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +1961,11 @@ std::unique_ptr<Tool> createTool(Tool::Id id, ToolSettings *s)
     case Tool::Eraser: return std::make_unique<BrushTool>(s, BrushTool::Erase);
     case Tool::CloneStamp: return std::make_unique<BrushTool>(s, BrushTool::Clone);
     case Tool::Healing: return std::make_unique<BrushTool>(s, BrushTool::Heal);
+    case Tool::SpotHealing: return std::make_unique<BrushTool>(s, BrushTool::SpotHeal);
+    case Tool::Blur: return std::make_unique<BrushTool>(s, BrushTool::BlurMode);
+    case Tool::Sharpen: return std::make_unique<BrushTool>(s, BrushTool::SharpenMode);
+    case Tool::Sponge: return std::make_unique<BrushTool>(s, BrushTool::SpongeMode);
+    case Tool::PolyLasso: return std::make_unique<PolygonLassoTool>(s);
     case Tool::Smudge: return std::make_unique<BrushTool>(s, BrushTool::SmudgeMode);
     case Tool::Dodge: return std::make_unique<BrushTool>(s, BrushTool::DodgeMode);
     case Tool::Burn: return std::make_unique<BrushTool>(s, BrushTool::BurnMode);
@@ -1679,14 +1992,19 @@ QString Tool::name(Id id)
     case RectSelect: return QObject::tr("Rectangular Marquee");
     case EllipseSelect: return QObject::tr("Elliptical Marquee");
     case Lasso: return QObject::tr("Lasso");
+    case PolyLasso: return QObject::tr("Polygonal Lasso");
     case MagicWand: return QObject::tr("Magic Wand");
     case Crop: return QObject::tr("Crop");
     case Eyedropper: return QObject::tr("Eyedropper");
     case Brush: return QObject::tr("Brush");
     case Eraser: return QObject::tr("Eraser");
     case CloneStamp: return QObject::tr("Clone Stamp");
+    case SpotHealing: return QObject::tr("Spot Healing Brush");
     case Healing: return QObject::tr("Healing Brush");
     case Smudge: return QObject::tr("Smudge");
+    case Blur: return QObject::tr("Blur");
+    case Sharpen: return QObject::tr("Sharpen");
+    case Sponge: return QObject::tr("Sponge");
     case Dodge: return QObject::tr("Dodge");
     case Burn: return QObject::tr("Burn");
     case Fill: return QObject::tr("Paint Bucket");
@@ -1704,8 +2022,9 @@ QString Tool::name(Id id)
 
 QString Tool::shortcut(Id id)
 {
-    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "W", "C", "I", "B", "E", "S", "J",
-                                      "R", "O", "Shift+O", "K", "G", "N", "U", "Shift+U", "T", "H", "Z"};
+    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "E", "S",
+                                      "J", "Shift+J", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
+                                      "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
 }
 
@@ -1718,7 +2037,12 @@ QString Tool::hint(Id id)
     case EllipseSelect:
     case Lasso:
     case MagicWand: return QObject::tr("Shift: add · Alt/Ctrl: subtract · Shift+Alt: intersect · click to deselect");
-    case Crop: return QObject::tr("Drag a rectangle, then press Enter or double-click. Esc cancels.");
+    case Crop: return QObject::tr("Drag a frame · drag inside to move, outside to straighten · Enter crops, Esc cancels");
+    case PolyLasso: return QObject::tr("Click corner points · double-click or click the first point to close · Backspace undoes a point");
+    case SpotHealing: return QObject::tr("Paint over spots and blemishes; a matching patch nearby replaces them");
+    case Blur: return QObject::tr("Paint to soften details");
+    case Sharpen: return QObject::tr("Paint to sharpen details");
+    case Sponge: return QObject::tr("Paint to remove (or add) color saturation");
     case Eyedropper: return QObject::tr("Click: foreground color · Right-click or Alt-click: background color");
     case Brush:
     case Eraser: return QObject::tr("Shift-click draws a straight line from the last stroke · [ ] change size");
@@ -1743,7 +2067,8 @@ QString Tool::hint(Id id)
 bool Tool::editsPixels(Id id)
 {
     switch (id) {
-    case Transform: case Brush: case Eraser: case CloneStamp: case Healing: case Smudge: case Dodge: case Burn:
+    case Transform: case Brush: case Eraser: case CloneStamp: case SpotHealing: case Healing: case Smudge:
+    case Blur: case Sharpen: case Dodge: case Burn: case Sponge:
     case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
         return true;
     default:
