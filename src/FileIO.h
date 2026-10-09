@@ -21,7 +21,10 @@ bool save(const Document *doc, const QString &path, QString *error, QString *war
 // `warning` (optional) receives notes about content that couldn't be fully reproduced.
 Document *load(const QString &path, QString *error, QString *warning = nullptr);
 bool saveProject(const Document *doc, const QString &path, QString *error);
-bool exportImage(const Document *doc, const QString &path, QString *error);
+// `quality` (1..100) is for JPEG and WebP; 0 uses 92.
+bool exportImage(const Document *doc, const QString &path, QString *error, int quality = 0);
+// Whether a file name's format has a quality setting (lossy compression).
+bool hasQuality(const QString &path);
 
 // Largest image (in pixels) the readers accept; damaged files can claim absurd sizes.
 qint64 maxImagePixels();

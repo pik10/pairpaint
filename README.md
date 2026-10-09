@@ -36,8 +36,9 @@ You can also [build from source](#building).
   Photoshop's Pass Through); move, duplicate, merge or ungroup whole groups
 - **Layer styles** (non-destructive): Drop Shadow, Outer Glow, Stroke
 - **Layer masks**: reveal all / from selection, paint on the mask with any tool, disable, apply, delete
-- **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves,
-  Hue/Saturation, Invert, Threshold, Posterize. Double-click one to edit it.
+- **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves, Exposure,
+  Vibrance, Hue/Saturation, Color Balance, White Balance, Invert, Threshold, Posterize. Double-click one
+  to edit it.
 - **Text on the canvas**: click and type directly on the image; click existing text to edit it in place
   (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
   editable when moved, and become pixels only when painted on
@@ -49,15 +50,15 @@ You can also [build from source](#building).
 - **Selections**: pixel masks with anti-aliasing, add / subtract / intersect, invert, marching ants;
   Feather, Expand, Contract, Border, Smooth, Color Range and Load Layer Transparency;
   every paint tool and filter respects the selection; Move and Free Transform act on selected pixels
-- **Adjustments**: Levels, Curves (with histogram), Brightness/Contrast, Hue/Saturation, Desaturate,
-  Invert, Threshold, Posterize
+- **Adjustments**: all of the above, plus one-click **Auto Tone**, **Auto Contrast** and **Auto Color**
+  (removes color casts), and Desaturate
 - **Filters**: Gaussian Blur, Unsharp Mask, Add Noise, Pixelate, all with live preview, multi-threaded
 - **Image**: Image Size, Canvas Size (with anchor), Crop, Rotate, Flip
 - **Undo** (80 steps) with a History panel, multiple documents in tabs
 - **Files**: native `.pairpaint` project format (keeps everything); **Photoshop PSD** import (RGB, grayscale,
   CMYK; 8/16-bit; raw/RLE/ZIP; layers, groups, masks, vector masks, clipping masks, Fill, all blend modes,
   adjustment layers, fill and shape layers, drop shadow / outer glow / stroke effects) and layered export; open/export PNG, JPEG,
-  WebP, BMP, TIFF, GIF, …; clipboard copy/paste; drag and drop
+  WebP, BMP, TIFF, GIF, … (with a quality setting for JPEG and WebP); clipboard copy/paste; drag and drop
 
 ## Building
 
@@ -90,6 +91,8 @@ cmake --build build -j
 | Clone Stamp | S | | Levels / Curves | Ctrl+L / Ctrl+M |
 | Spot Healing / Healing | J / Shift+J | | Group / ungroup layers | Ctrl+G / Ctrl+Shift+G |
 | Smudge / Blur / Dodge / Burn | R / Shift+R / O / Shift+O | | | |
+| | | | Auto Tone / Contrast / Color | Ctrl+Shift+L / Ctrl+Alt+Shift+L / Ctrl+Shift+B |
+| | | | Color Balance | Ctrl+B |
 | | | | Feather selection | Shift+F6 |
 | | | | Create / release clipping mask | Ctrl+Alt+G |
 | | | | Toggle editing mask / layer | Ctrl+\\ |
@@ -129,10 +132,10 @@ When a PSD uses something PairPaint can't reproduce exactly, it says so when the
 
 - Editing is 8 bits per channel RGB. 16-bit and CMYK PSD files are converted to 8-bit RGB when opened.
 - PSD import, rendered approximately: modern Brightness/Contrast (Photoshop's formula isn't public),
-  Hue/Saturation color ranges, Dissolve (a random pattern, so pixels differ), inside/center strokes,
+  Hue/Saturation color ranges, Vibrance and Color Balance, Dissolve (a random pattern, so pixels differ), inside/center strokes,
   and Photoshop's "advanced blending" options.
-- PSD import, not supported: Color Balance, Vibrance, Selective Color, Channel Mixer, Gradient Map,
-  Photo Filter, Exposure, Black & White and Color Lookup adjustment layers; inner shadow, inner glow,
+- PSD import, not supported: Selective Color, Channel Mixer, Gradient Map, Photo Filter, Black & White
+  and Color Lookup adjustment layers; inner shadow, inner glow,
   bevel, satin and overlay effects. Vector masks become pixel masks; text stays as pixels.
 - PSD export writes pixel layers, groups, masks, clipping, Fill and blend modes; layer styles are merged
   into the pixels, and adjustment layers are left out (keep them in `.pairpaint`). Large-document PSB

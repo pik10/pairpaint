@@ -279,7 +279,9 @@ void MainWindow::createMenus()
     QMenu *adjust = image->addMenu(tr("&Adjustments"));
     const QList<QPair<Adjustment::Type, QKeySequence>> adjustments = {
         {Adjustment::BrightnessContrast, {}}, {Adjustment::Levels, QKeySequence("Ctrl+L")},
-        {Adjustment::Curves, QKeySequence("Ctrl+M")}, {Adjustment::HueSaturation, QKeySequence("Ctrl+U")},
+        {Adjustment::Curves, QKeySequence("Ctrl+M")},
+        {Adjustment::Exposure, {}}, {Adjustment::Vibrance, {}}, {Adjustment::HueSaturation, QKeySequence("Ctrl+U")},
+        {Adjustment::ColorBalance, QKeySequence("Ctrl+B")}, {Adjustment::WhiteBalance, {}},
         {Adjustment::Invert, QKeySequence("Ctrl+I")}, {Adjustment::Threshold, {}}, {Adjustment::Posterize, {}},
     };
     for (const auto &entry : adjustments) {
@@ -287,6 +289,21 @@ void MainWindow::createMenus()
         const QKeySequence key = entry.second;
         const QString suffix = type == Adjustment::Invert ? QString() : QStringLiteral("…");
         addAction(adjust, Adjustments::name(type) + suffix, key, [this, type] { runAdjustment(type); });
+    }
+    adjust->addSeparator();
+    const QList<std::tuple<QString, QKeySequence, Adjustments::Auto>> autos = {
+        {tr("Auto &Tone"), QKeySequence("Ctrl+Shift+L"), Adjustments::Auto::Tone},
+        {tr("Auto C&ontrast"), QKeySequence("Ctrl+Alt+Shift+L"), Adjustments::Auto::Contrast},
+        {tr("Auto Co&lor"), QKeySequence("Ctrl+Shift+B"), Adjustments::Auto::Color},
+    };
+    for (const auto &[title, key, mode] : autos) {
+        const Adjustments::Auto m = mode;  // named copies for the lambda
+        const QString t = QString(title).remove(QLatin1Char('&'));
+        addAction(adjust, title, key, [this, t, m] {
+            runFilter(t, {}, [m](const QImage &img, const QList<int> &) {
+                return Adjustments::apply(img, Adjustment::Levels, Adjustments::autoLevels(img, m));
+            });
+        });
     }
     adjust->addSeparator();
     addAction(adjust, tr("&Desaturate"), QKeySequence("Ctrl+Shift+U"), [this] {
@@ -854,8 +871,17 @@ void MainWindow::exportDocument()
         return;
     if (QFileInfo(path).suffix().isEmpty())
         path += QStringLiteral(".png");
+    int quality = 0;
+    if (FileIO::hasQuality(path)) {
+        bool ok = false;
+        quality = QInputDialog::getInt(this, tr("Export As"), tr("Quality (1–100, higher is better but larger):"),
+                                       QSettings().value("exportQuality", 92).toInt(), 1, 100, 1, &ok);
+        if (!ok)
+            return;
+        QSettings().setValue("exportQuality", quality);
+    }
     QString error;
-    if (!FileIO::exportImage(d, path, &error))
+    if (!FileIO::exportImage(d, path, &error, quality))
         QMessageBox::critical(this, tr("Export"), tr("Could not export:\n%1").arg(error));
     else
         statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3000);

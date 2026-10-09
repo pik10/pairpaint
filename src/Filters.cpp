@@ -301,6 +301,116 @@ QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness, 
     });
 }
 
+QImage vibrance(const QImage &src, int vibrance, int saturation)
+{
+    const float vib = std::clamp(vibrance, -100, 100) / 100.0f;
+    const float sat = std::clamp(saturation, -100, 100) / 100.0f;
+    return mapPixels(src, [&](QRgb p) {
+        if (qAlpha(p) == 0)
+            return p;
+        const float r = qRed(p), g = qGreen(p), b = qBlue(p);
+        const float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+        const float s = (mx - mn) / 255.0f;  // 0 gray .. 1 fully saturated
+        float v = vib;
+        if (v > 0) {
+            v *= 1 - s;                      // dull colors gain the most
+            if (r >= g && g >= b)            // reds to yellows: where skin tones lie
+                v *= 0.5f;
+        }
+        // Scale the distance from gray, but never past the point where a channel clips.
+        float scale = (1 + sat) * (1 + v);
+        const float l = 0.299f * r + 0.587f * g + 0.114f * b;
+        if (scale > 1) {
+            float limit = 1e9f;
+            for (float c : {r, g, b}) {
+                if (c > l)
+                    limit = std::min(limit, (255 - l) / (c - l));
+                else if (c < l)
+                    limit = std::min(limit, l / (l - c));
+            }
+            scale = std::min(scale, std::max(1.0f, limit));
+        }
+        auto f = [&](float c) { return clamp255(int(std::lround(l + (c - l) * scale))); };
+        return qRgba(f(r), f(g), f(b), qAlpha(p));
+    });
+}
+
+namespace {
+
+double toLinear(double v) { return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); }
+double toSrgb(double v)
+{
+    v = std::clamp(v, 0.0, 1.0);
+    return v <= 0.0031308 ? v * 12.92 : 1.055 * std::pow(v, 1 / 2.4) - 0.055;
+}
+
+} // namespace
+
+QImage exposure(const QImage &src, double stops, double offset, double gamma)
+{
+    const double gain = std::exp2(std::clamp(stops, -20.0, 20.0));
+    gamma = std::clamp(gamma, 0.01, 9.99);
+    return mapLut(src, [&](int i) {
+        const double v = std::max(0.0, toLinear(i / 255.0) * gain + offset);
+        return int(std::lround(toSrgb(std::pow(v, 1 / gamma)) * 255));
+    });
+}
+
+QImage colorBalance(const QImage &src, const QList<int> &values, bool preserveLuminosity)
+{
+    float shift[3][3] = {};  // [range][channel]
+    for (int k = 0; k < 9 && k < values.size(); ++k)
+        shift[k / 3][k % 3] = std::clamp(values[k], -100, 100) / 100.0f;
+    // Tonal weights by lightness, as in GIMP's Color Balance: shadows fade out by the middle,
+    // highlights fade in from it, midtones peak in between.
+    constexpr float a = 0.25f, b = 0.333f, scale = 0.7f;
+    float w[3][256];
+    for (int i = 0; i < 256; ++i) {
+        const float l = i / 255.0f;
+        w[0][i] = std::clamp((l - b) / -a + 0.5f, 0.0f, 1.0f) * scale;
+        w[1][i] = std::clamp((l - b) / a + 0.5f, 0.0f, 1.0f) * std::clamp((l + b - 1) / -a + 0.5f, 0.0f, 1.0f) * scale;
+        w[2][i] = std::clamp((l + b - 1) / a + 0.5f, 0.0f, 1.0f) * scale;
+    }
+    return mapPixels(src, [&](QRgb p) {
+        if (qAlpha(p) == 0)
+            return p;
+        const int c[3] = {qRed(p), qGreen(p), qBlue(p)};
+        const int mx = std::max({c[0], c[1], c[2]}), mn = std::min({c[0], c[1], c[2]});
+        const int light = (mx + mn) / 2;
+        float out[3];
+        for (int ch = 0; ch < 3; ++ch) {
+            float v = c[ch] / 255.0f;
+            for (int range = 0; range < 3; ++range)
+                v += shift[range][ch] * w[range][light];
+            out[ch] = std::clamp(v, 0.0f, 1.0f) * 255;
+        }
+        int r = int(std::lround(out[0])), g = int(std::lround(out[1])), b = int(std::lround(out[2]));
+        if (preserveLuminosity) {  // keep the new hue and saturation at the original lightness
+            float h, s, l;
+            rgbToHsl(r, g, b, h, s, l);
+            hslToRgb(h, s, light / 255.0f, r, g, b);
+        }
+        return qRgba(r, g, b, qAlpha(p));
+    });
+}
+
+QImage whiteBalance(const QImage &src, int temperature, int tint)
+{
+    // Channel gains in linear light, normalized so a gray keeps its brightness.
+    const double t = std::clamp(temperature, -100, 100) / 100.0 * 0.5;
+    const double m = std::clamp(tint, -100, 100) / 100.0 * 0.25;
+    double gain[3] = {1 + t, 1 - m, 1 - t};
+    const double luminance = 0.2126 * gain[0] + 0.7152 * gain[1] + 0.0722 * gain[2];
+    QList<int> luts[3];
+    for (int ch = 0; ch < 3; ++ch) {
+        gain[ch] /= luminance;
+        luts[ch].resize(256);
+        for (int i = 0; i < 256; ++i)
+            luts[ch][i] = int(std::lround(toSrgb(toLinear(i / 255.0) * gain[ch]) * 255));
+    }
+    return applyLuts(src, luts[0], luts[1], luts[2]);
+}
+
 QImage threshold(const QImage &src, int level)
 {
     return mapPixels(src, [&](QRgb p) {
@@ -564,6 +674,23 @@ QList<int> histogram(const QImage &src)
         for (int x = 0; x < img.width(); ++x)
             if (qAlpha(row[x]))
                 ++bins[luma(row[x])];
+    }
+    return bins;
+}
+
+std::array<QList<int>, 3> channelHistograms(const QImage &src)
+{
+    const QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    std::array<QList<int>, 3> bins = {QList<int>(256, 0), QList<int>(256, 0), QList<int>(256, 0)};
+    for (int y = 0; y < img.height(); ++y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        for (int x = 0; x < img.width(); ++x) {
+            if (qAlpha(row[x])) {
+                ++bins[0][qRed(row[x])];
+                ++bins[1][qGreen(row[x])];
+                ++bins[2][qBlue(row[x])];
+            }
+        }
     }
     return bins;
 }

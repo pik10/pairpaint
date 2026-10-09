@@ -15,6 +15,7 @@
 #include <QVariant>
 #include <QtEndian>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <new>
 
@@ -72,6 +73,13 @@ public:
     qint32 i32() { return read<qint32>(); }
     qint64 i64() { return read<qint64>(); }
     double f64() { return read<double>(); }
+    float f32()
+    {
+        const quint32 bits = read<quint32>();
+        float v;
+        std::memcpy(&v, &bits, sizeof v);
+        return std::isfinite(v) ? v : 0.0f;
+    }
     QByteArray bytes(qint64 n)
     {
         if (n < 0 || n > m_file.size() - m_file.pos() || n > std::numeric_limits<int>::max())
@@ -485,9 +493,8 @@ QImage vectorMaskImage(const QPainterPath &unitPath, bool inverted, const QSize 
 QString unsupportedAdjustmentName(const QByteArray &key)
 {
     static const QList<QPair<QByteArray, const char *>> names = {
-        {"blnc", "Color Balance"}, {"selc", "Selective Color"}, {"mixr", "Channel Mixer"},
-        {"vibA", "Vibrance"},       {"grdm", "Gradient Map"},    {"phfl", "Photo Filter"},
-        {"expA", "Exposure"},       {"blwh", "Black & White"},   {"clrL", "Color Lookup"},
+        {"selc", "Selective Color"}, {"mixr", "Channel Mixer"}, {"grdm", "Gradient Map"},
+        {"phfl", "Photo Filter"},    {"blwh", "Black & White"}, {"clrL", "Color Lookup"},
     };
     for (const auto &[k, n] : names)
         if (k == key)
@@ -529,6 +536,23 @@ void readLayerInfo(Reader &r, const QByteArray &key, qint64 dataEnd, LayerRecord
                           {toInt(num(d, "Brgh"), -150, 150), toInt(num(d, "Cntr"), -100, 100), legacy ? 1 : 0}};
         if (!legacy)
             rec.approximate = QStringLiteral("Brightness/Contrast (approximated)");
+    } else if (key == "vibA") {
+        r.u32();  // descriptor version
+        const QVariantMap d = DescriptorParser(r).descriptor();
+        rec.adjustment = {Adjustment::Vibrance, {toInt(num(d, "vibrance"), -100, 100), toInt(num(d, "Strt"), -100, 100)}};
+        rec.approximate = QStringLiteral("Vibrance (approximated)");
+    } else if (key == "expA") {
+        r.u16();  // version
+        const double exposure = r.f32(), offset = r.f32(), gamma = r.f32();
+        rec.adjustment = {Adjustment::Exposure, {toInt(exposure * 100, -1000, 1000), toInt(offset * 1000, -500, 500),
+                                                 toInt(gamma * 100, 10, 999)}};
+    } else if (key == "blnc") {
+        QList<int> params;  // shadows, midtones, highlights: cyan-red, magenta-green, yellow-blue
+        for (int k = 0; k < 9; ++k)
+            params << std::clamp(int(r.i16()), -100, 100);
+        params << (r.u8() ? 1 : 0);  // preserve luminosity
+        rec.adjustment = {Adjustment::ColorBalance, params};
+        rec.approximate = QStringLiteral("Color Balance (approximated)");
     } else if (key == "levl") {
         r.u16();  // version
         // Records: all channels, then red, green, blue. Each: input black/white,

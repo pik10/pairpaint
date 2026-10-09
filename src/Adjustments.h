@@ -18,13 +18,18 @@ struct FilterParam {
 // A color adjustment: used destructively from the Image > Adjustments menu
 // and non-destructively by adjustment layers.
 struct Adjustment {
-    enum Type { None, BrightnessContrast, HueSaturation, Levels, Curves, Invert, Threshold, Posterize, TypeCount };
+    enum Type {
+        None, BrightnessContrast, HueSaturation, Levels, Curves, Invert, Threshold, Posterize,
+        Vibrance, Exposure, ColorBalance, WhiteBalance, TypeCount
+    };
     Type type = None;
     // Meaning depends on type. Levels: 5 values for all channels, optionally followed by
     // 5 each for red, green and blue. Curves: flattened x,y points of the main curve,
     // optionally followed by -1 and, for red, green and blue, a point count and the points.
     // Hue/Saturation: hue, saturation, lightness, optionally followed by color ranges (7 values
     // each). Brightness/Contrast: brightness, contrast, optionally 1 for Photoshop's legacy formula.
+    // Exposure: stops, offset and gamma, times 100, 1000 and 100. Color Balance: 9 shifts (see
+    // Filters::colorBalance), optionally followed by 0 to not preserve luminosity.
     QList<int> params;
 };
 
@@ -43,5 +48,11 @@ QList<int> validated(Adjustment::Type type, QList<int> params);
 QList<int> mainParams(Adjustment::Type type, const QList<int> &params);
 // `params` with the main part replaced by `main`, keeping any per-channel settings.
 QList<int> withMainParams(Adjustment::Type type, const QList<int> &params, const QList<int> &main);
+
+// One-click corrections, as Levels settings computed from the image (ignoring the darkest and
+// lightest 0.1% of pixels). Tone stretches each channel, Contrast all channels alike (colors
+// keep their balance), Color stretches each channel and makes near-gray midtones neutral.
+enum class Auto { Tone, Contrast, Color };
+QList<int> autoLevels(const QImage &image, Auto mode);
 
 } // namespace Adjustments

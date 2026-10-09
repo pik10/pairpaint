@@ -32,6 +32,8 @@
 #include <QtMath>
 #include <QTreeWidget>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 
 static QTemporaryDir *outputDir = nullptr;
 static QString tmpPath(const char *name) { return outputDir->filePath(QString::fromLatin1(name)); }
@@ -1002,12 +1004,151 @@ static void testHostileFiles()
     CHECK(hs.mid(3, 7) == QList<int>({360, 0, 360, 10, 180, -100, 100}));
 }
 
+static void testPhotoFixes()
+{
+    auto image = [](int w, int h, const std::function<QColor(int, int)> &f) {
+        QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                img.setPixelColor(x, y, f(x, y));
+        return img;
+    };
+    auto range = [](const QImage &img, int channel) {
+        int lo = 255, hi = 0;
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x) {
+                const QColor c = img.pixelColor(x, y);
+                const int v = channel == 0 ? c.red() : channel == 1 ? c.green() : c.blue();
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+        return std::pair(lo, hi);
+    };
+    using Adjustments::Auto;
+    auto autoFix = [](const QImage &img, Auto mode) {
+        return Adjustments::apply(img, Adjustment::Levels, Adjustments::autoLevels(img, mode));
+    };
+    // A dull photo: red spans 60..180, blue only 100..140.
+    const QImage dull = image(121, 4, [](int x, int) { return QColor(60 + x, 80 + x / 2, 100 + x / 3); });
+    const QImage tone = autoFix(dull, Auto::Tone);
+    CHECK(range(tone, 0) == std::pair(0, 255) && range(tone, 2) == std::pair(0, 255));  // every channel stretched
+    const QImage contrast = autoFix(dull, Auto::Contrast);
+    CHECK(range(contrast, 0).first == 0 && range(contrast, 0).second > 200);
+    CHECK(range(contrast, 2).second - range(contrast, 2).first < 150);  // colors keep their balance
+    // A gray ramp with a red cast becomes neutral.
+    const QImage cast = image(200, 4, [](int x, int) { return QColor(std::min(255, 40 + x + 30), 40 + x, 40 + x); });
+    const QImage color = autoFix(cast, Auto::Color);
+    const QColor mid = color.pixelColor(100, 1);
+    CHECK(std::abs(mid.red() - mid.blue()) <= 4 && std::abs(mid.red() - mid.green()) <= 4);
+    QImage clear(8, 8, QImage::Format_ARGB32_Premultiplied);
+    clear.fill(Qt::transparent);
+    CHECK(Adjustments::autoLevels(clear, Auto::Color) == Adjustments::defaults(Adjustment::Levels));
+
+    // Vibrance boosts dull colors more than saturated ones, and doesn't clip.
+    const QImage two = image(2, 1, [](int x, int) { return x == 0 ? QColor(110, 120, 140) : QColor(30, 60, 220); });
+    const QImage vib = Adjustments::apply(two, Adjustment::Vibrance, {100, 0});
+    auto chroma = [](QColor c) { return std::max({c.red(), c.green(), c.blue()}) - std::min({c.red(), c.green(), c.blue()}); };
+    const double dullGain = chroma(vib.pixelColor(0, 0)) / double(chroma(two.pixelColor(0, 0)));
+    const double vividGain = chroma(vib.pixelColor(1, 0)) / double(chroma(two.pixelColor(1, 0)));
+    CHECK(dullGain > 1.6 && vividGain < 1.3 && dullGain > vividGain + 0.4);
+    CHECK(vib.pixelColor(1, 0).blue() <= 255 && vib.pixelColor(1, 0).red() > 0);
+    const QImage gray = image(1, 1, [](int, int) { return QColor(128, 128, 128); });
+    CHECK(chroma(Adjustments::apply(two, Adjustment::Vibrance, {0, -100}).pixelColor(1, 0)) <= 1);  // fully gray
+
+    // Exposure +1 stop doubles the light: sRGB 128 is 0.216 linear, so 0.432, which is 175 in sRGB.
+    CHECK(std::abs(Adjustments::apply(gray, Adjustment::Exposure, {100, 0, 100}).pixelColor(0, 0).red() - 175) <= 1);
+    CHECK(Adjustments::apply(gray, Adjustment::Exposure, {0, 0, 100}).pixelColor(0, 0) == QColor(128, 128, 128));
+    // White balance: warmer is redder and less blue, and a gray keeps roughly its brightness.
+    const QColor warm = Adjustments::apply(gray, Adjustment::WhiteBalance, {60, 0}).pixelColor(0, 0);
+    CHECK(warm.red() > 140 && warm.blue() < 110 && std::abs(warm.green() - 128) < 12);
+    const QColor magenta = Adjustments::apply(gray, Adjustment::WhiteBalance, {0, 60}).pixelColor(0, 0);
+    CHECK(magenta.green() < 128 && magenta.red() > 128 && magenta.blue() > 128);
+    // Color Balance: red in the shadows reddens dark pixels but hardly touches light ones.
+    const QImage darkLight = image(2, 1, [](int x, int) { return x == 0 ? QColor(40, 40, 40) : QColor(230, 230, 230); });
+    QList<int> cb = Adjustments::defaults(Adjustment::ColorBalance);
+    CHECK(cb.size() == 9);
+    cb[0] = 100;
+    cb << 0;  // don't preserve luminosity
+    const QImage reddened = Adjustments::apply(darkLight, Adjustment::ColorBalance, cb);
+    CHECK(reddened.pixelColor(0, 0).red() > 120 && reddened.pixelColor(0, 0).green() == 40);
+    CHECK(std::abs(reddened.pixelColor(1, 0).red() - 230) <= 2);
+    cb[9] = 1;  // preserve luminosity: redder, but the lightness stays
+    const QColor kept = Adjustments::apply(darkLight, Adjustment::ColorBalance, cb).pixelColor(0, 0);
+    CHECK(kept.red() > kept.green() && std::abs((std::max({kept.red(), kept.green(), kept.blue()})
+                                                 + std::min({kept.red(), kept.green(), kept.blue()})) / 2 - 40) <= 1);
+    CHECK(Adjustments::mainParams(Adjustment::ColorBalance, cb).size() == 9
+          && Adjustments::withMainParams(Adjustment::ColorBalance, cb, QList<int>(9, 5)).value(9) == 1);
+
+    // New adjustment layers survive a project round trip, including the hidden flag.
+    QString err, warn;
+    {
+        Document d(QSize(20, 20), Qt::gray);
+        d.addAdjustmentLayer({Adjustment::ColorBalance, cb});
+        d.addAdjustmentLayer({Adjustment::Exposure, {-150, 20, 120}});
+        CHECK(FileIO::saveProject(&d, tmpPath("photo-fixes.pairpaint"), &err));
+        Document *back = FileIO::load(tmpPath("photo-fixes.pairpaint"), &err, &warn);
+        CHECK(back && back->layerCount() == 3 && back->layer(1).adjustment.type == Adjustment::ColorBalance
+              && back->layer(1).adjustment.params == cb && back->layer(2).adjustment.params == QList<int>({-150, 20, 120}));
+        delete back;
+    }
+
+    // Photoshop's Vibrance, Exposure and Color Balance layers open as adjustment layers.
+    {
+        using namespace psdbuild;
+        Out vib;
+        vib.u32(16).u32(0).u32(0).raw("null").u32(2);
+        vib.u32(8).raw("vibrance").raw("long").u32(35);
+        vib.u32(0).raw("Strt").raw("long").u32(quint32(-20));
+        Out exp;
+        exp.u16(1);
+        for (float f : {1.5f, -0.05f, 1.2f}) {
+            quint32 bits;
+            std::memcpy(&bits, &f, 4);
+            exp.u32(bits);
+        }
+        Out bal;
+        for (int v : {10, -20, 30, 0, 0, 0, -5, 0, 100})
+            bal.u16(v & 0xffff);
+        bal.u8(0);
+        LayerSpec base{QRect(0, 0, 4, 4), {}, {}};
+        for (int id : {0, 1, 2, -1})
+            base.ch.append({id, Out().u16(0).raw(QByteArray(16, char(128))).b});
+        const QByteArray psd = file(4, 4, {base, {QRect(), block("vibA", vib.b), {}}, {QRect(), block("expA", exp.b), {}},
+                                         {QRect(), block("blnc", bal.b), {}}});
+        QFile f(tmpPath("photo-fixes.psd"));
+        CHECK(f.open(QIODevice::WriteOnly) && f.write(psd) == psd.size());
+        f.close();
+        Document *d = FileIO::load(tmpPath("photo-fixes.psd"), &err, &warn);
+        CHECK(d && d->layerCount() == 4);
+        if (d && d->layerCount() == 4) {
+            CHECK(d->layer(1).adjustment.type == Adjustment::Vibrance && d->layer(1).adjustment.params == QList<int>({35, -20}));
+            CHECK(d->layer(2).adjustment.type == Adjustment::Exposure && d->layer(2).adjustment.params == QList<int>({150, -50, 120}));
+            CHECK(d->layer(3).adjustment.type == Adjustment::ColorBalance
+                  && d->layer(3).adjustment.params == QList<int>({10, -20, 30, 0, 0, 0, -5, 0, 100, 0}));
+            CHECK(!warn.contains("Exposure") && !warn.contains("not supported"));
+        }
+        delete d;
+    }
+
+    // JPEG quality: lower quality, smaller file.
+    {
+        Document d(image(200, 200, [](int x, int y) { return QColor((x * 7) % 256, (y * 5) % 256, (x * y) % 256); }));
+        CHECK(FileIO::exportImage(&d, tmpPath("q10.jpg"), &err, 10) && FileIO::exportImage(&d, tmpPath("q95.jpg"), &err, 95));
+        CHECK(QFileInfo(tmpPath("q10.jpg")).size() * 2 < QFileInfo(tmpPath("q95.jpg")).size());
+        CHECK(FileIO::hasQuality("a.JPG") && FileIO::hasQuality("b.webp") && !FileIO::hasQuality("c.png"));
+    }
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
     QApplication::setOrganizationName("PairPaintTests");
     QTemporaryDir dir;
     outputDir = &dir;
+    if (qEnvironmentVariableIsSet("PAIRPAINT_KEEP_TEST_FILES")) {  // e.g. to make new fuzzing seeds
+        dir.setAutoRemove(false);
+        std::printf("test files kept in %s\n", qPrintable(dir.path()));
+    }
     app.setStyle(QStyleFactory::create("Fusion"));
     { QPalette p; QColor win(50,50,50), base(35,35,35), text(225,225,225);
       p.setColor(QPalette::Window, win); p.setColor(QPalette::WindowText, text); p.setColor(QPalette::Base, base);
@@ -1368,6 +1509,7 @@ int main(int argc, char **argv) {
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();
+    testPhotoFixes();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;

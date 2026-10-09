@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Auto Tone**, **Auto Contrast** and **Auto Color** (Image > Adjustments): one-click fixes for
+  dull or flat photos; Auto Color also removes color casts.
+- **White Balance** adjustment: Temperature (cooler / warmer) and Tint (green / magenta).
+- **Vibrance**, **Exposure** and **Color Balance** adjustments, also as adjustment layers. Photoshop
+  files with these adjustment layers now open with them (Vibrance and Color Balance approximated).
+- **JPEG and WebP quality** setting when exporting, remembered for next time.
+
+### Changed
+- Project files are now version 7 (for the new adjustment layers).
+
 ## 0.3.2 — 2026-10-09
 
 ### Fixed

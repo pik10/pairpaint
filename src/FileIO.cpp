@@ -22,8 +22,9 @@
 namespace {
 
 constexpr quint32 kMagic = 0x50504E54;  // "PPNT"
-constexpr quint32 kVersion = 6;  // 2: masks, adjustments, text; 3: styles; 4: groups; 5: clipping, fill;
-                                  // 6: fonts stored as description strings
+constexpr quint32 kVersion = 7;  // 2: masks, adjustments, text; 3: styles; 4: groups; 5: clipping, fill;
+                                  // 6: fonts stored as description strings; 7: Vibrance, Exposure,
+                                  // Color Balance and White Balance adjustments
 const QString kProjectSuffix = QStringLiteral("pairpaint");
 
 QString projectFilterEntry() { return QObject::tr("PairPaint Project (*.pairpaint)"); }
@@ -387,7 +388,13 @@ bool saveProject(const Document *doc, const QString &path, QString *error)
     return true;
 }
 
-bool exportImage(const Document *doc, const QString &path, QString *error)
+bool hasQuality(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    return suffix == "jpg" || suffix == "jpeg" || suffix == "webp";
+}
+
+bool exportImage(const Document *doc, const QString &path, QString *error, int quality)
 {
     QImage img = doc->flattened();
     const QString suffix = QFileInfo(path).suffix().toLower();
@@ -401,8 +408,8 @@ bool exportImage(const Document *doc, const QString &path, QString *error)
         img = opaque;
     }
     QImageWriter writer(path);
-    if (suffix == "jpg" || suffix == "jpeg" || suffix == "webp")
-        writer.setQuality(92);
+    if (hasQuality(path))
+        writer.setQuality(quality > 0 ? std::min(quality, 100) : 92);
     if (!writer.write(img)) {
         *error = writer.errorString();
         return false;

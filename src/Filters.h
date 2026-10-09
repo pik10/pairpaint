@@ -6,6 +6,8 @@
 #include <QImage>
 #include <QList>
 
+#include <array>
+
 // Image filters. Inputs may be any format; outputs are ARGB32_Premultiplied
 // (or Alpha8 for floodMask). Work is spread over all cores with QtConcurrent.
 namespace Filters {
@@ -18,6 +20,17 @@ QImage brightnessContrastLegacy(const QImage &src, int brightness, int contrast)
 // `ranges`: optional color ranges, 7 values each: the range's outer start, inner start, inner
 // end and outer end hue (degrees), then its own hue, saturation and lightness changes.
 QImage hueSaturation(const QImage &src, int hue, int saturation, int lightness, const QList<int> &ranges = {});
+// Vibrance raises the saturation of dull colors more than of saturated ones and spares skin
+// tones; saturation changes all colors alike. Both -100..100.
+QImage vibrance(const QImage &src, int vibrance, int saturation);
+// Photographic exposure in linear light: `stops` (2^stops), then `offset` added, then gamma.
+QImage exposure(const QImage &src, double stops, double offset, double gamma);
+// `values`: 9 shifts in -100..100, cyan-red, magenta-green and yellow-blue for the shadows, then
+// the midtones, then the highlights.
+QImage colorBalance(const QImage &src, const QList<int> &values, bool preserveLuminosity);
+// Temperature (-100 cool/blue .. 100 warm/yellow) and tint (-100 green .. 100 magenta), keeping
+// the brightness.
+QImage whiteBalance(const QImage &src, int temperature, int tint);
 QImage threshold(const QImage &src, int level);
 QImage posterize(const QImage &src, int levels);
 QImage gaussianBlur(const QImage &src, double radius);
@@ -38,6 +51,8 @@ QList<int> levelsLut(int inBlack, int inWhite, double gamma, int outBlack, int o
 QList<int> curveLut(const QList<int> &points);
 // Luminance histogram (256 bins) of the non-transparent pixels.
 QList<int> histogram(const QImage &src);
+// Red, green and blue histograms (256 bins each) of the non-transparent pixels.
+std::array<QList<int>, 3> channelHistograms(const QImage &src);
 
 // Healing: keeps the texture of `source` but takes the low-frequency color and
 // lighting of `dest` around the stroke. `mask` (Alpha8) is the stroke coverage.

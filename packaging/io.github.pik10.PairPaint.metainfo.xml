@@ -16,7 +16,8 @@
     </p>
     <ul>
       <li>Layers with all Photoshop blend modes, masks, groups, clipping masks and styles (shadow, glow, stroke)</li>
-      <li>Adjustment layers: Levels, Curves, Hue/Saturation, Brightness/Contrast and more</li>
+      <li>Adjustment layers: Levels, Curves, Exposure, Vibrance, Hue/Saturation, Color Balance, White Balance and more</li>
+      <li>One-click Auto Tone, Auto Contrast and Auto Color</li>
       <li>Brush, Clone Stamp, Spot Healing and Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, gradients, shapes, and text typed on the canvas</li>
       <li>Selections with feather, expand, contract and color range; free transform</li>
       <li>Opens and saves layered Photoshop PSD files</li>

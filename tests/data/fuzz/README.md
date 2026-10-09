@@ -1,7 +1,9 @@
 # Fuzzing inputs
 
-- `seed-*.pairpaint`: small projects using every project-file feature, used as fuzzing seeds
-  (together with the PSDs in `../psd-tools`).
+- `seed-*.pairpaint`, `seed-*.psd`: small files used as fuzzing seeds (together with the PSDs in
+  `../psd-tools`). `seed-full` and `seed-small` are version 5 projects; `seed-v7-text`,
+  `seed-v7-adjustments` and `seed-adjustments.psd` (Vibrance, Exposure and Color Balance layers) are
+  written by the test suite: run it with `PAIRPAINT_KEEP_TEST_FILES=1` to make them again.
 - `hang-huge-layer-name.psd`: a corrupted PSD found by the fuzzer that made the reader loop for
   minutes (a layer name claiming ~4 billion characters past the end of the file). Kept as a
   regression test.
