@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-09
 
 ### New
 - **Autosave and crash recovery**: every 2 minutes, images with unsaved changes are copied to a

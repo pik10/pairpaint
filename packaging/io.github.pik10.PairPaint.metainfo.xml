@@ -51,6 +51,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-10-09">
+      <description>
+        <p>Autosave and crash recovery: unsaved changes are copied every 2 minutes, and after a crash PairPaint offers to recover them.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-09">
       <description>
         <p>Opens HEIC photos from iPhones, and shows wide-gamut photos (Display P3, Adobe RGB) with their correct colors.</p>
