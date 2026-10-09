@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Peter Gniewek and PairPaint contributors
+
+#pragma once
+
+#include "Adjustments.h"
+
+#include <QPointer>
+#include <QTimer>
+#include <QWidget>
+
+class Document;
+class QComboBox;
+class QLabel;
+class QListWidget;
+class QListWidgetItem;
+class QSlider;
+class QToolButton;
+
+class LayersPanel : public QWidget {
+    Q_OBJECT
+public:
+    explicit LayersPanel(QWidget *parent = nullptr);
+    void setDocument(Document *doc);
+
+signals:
+    void newAdjustmentRequested(Adjustment::Type type);
+    void editAdjustmentRequested(int layer);
+    void editTextRequested(int layer);
+
+private:
+    void scheduleRebuild();
+    void rebuild();
+    void refreshThumbnails();
+    void updateTargetButtons();
+    QIcon thumbnailFor(int layer) const;
+    int layerForRow(int row) const;
+    void onDoubleClicked(QListWidgetItem *item);
+
+    QPointer<Document> m_doc;
+    QListWidget *m_list;
+    QComboBox *m_mode;
+    QSlider *m_opacity;
+    QLabel *m_opacityLabel;
+    QToolButton *m_editLayer;
+    QToolButton *m_editMask;
+    QList<QWidget *> m_docWidgets;
+    QTimer m_rebuildTimer;
+    QTimer m_thumbTimer;
+    bool m_updating = false;
+};
