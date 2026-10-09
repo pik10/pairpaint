@@ -30,11 +30,15 @@ struct Adjustment {
 
 namespace Adjustments {
 
+constexpr int kMaxParams = 1000;  // longest settings list accepted from files
+
 QString name(Adjustment::Type type);
 QString shortName(Adjustment::Type type);    // for layer thumbnails
 QList<FilterParam> params(Adjustment::Type type);  // slider definitions (empty for Curves/Invert)
 QList<int> defaults(Adjustment::Type type);
 QImage apply(const QImage &image, Adjustment::Type type, const QList<int> &params);
+// `params` with every setting clamped to its valid range (settings can come from damaged files).
+QList<int> validated(Adjustment::Type type, QList<int> params);
 // The part of the parameters the dialogs edit (Levels: first 5; Curves: the main curve).
 QList<int> mainParams(Adjustment::Type type, const QList<int> &params);
 // `params` with the main part replaced by `main`, keeping any per-channel settings.

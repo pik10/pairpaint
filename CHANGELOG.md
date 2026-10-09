@@ -1,9 +1,30 @@
 # Changelog
 
+## 0.3.2 — 2026-10-09
+
+### Fixed
+A code review of 0.3.1 found attacks the fuzzer had missed. Files built on purpose could still
+exhaust memory or crash PairPaint:
+- PSD effects nested thousands of levels deep overflowed the stack (a crash).
+- PSD and project files with many layers on a large canvas could use tens of gigabytes: every
+  layer is a full-canvas image. Layers without pixels (groups, adjustments, empty layers) now share
+  one image, and a file whose layers need more than 8× the image size limit in total is rejected.
+- Small ZIP-compressed PSD channels or flattened images claiming huge sizes, and impossible channel
+  counts, are rejected before memory is reserved.
+- PNG, JPEG and other image files are checked for their size before they are decoded.
+- Out-of-range Hue/Saturation color-range settings from files were not fully clamped.
+
+### Changed
+- Project files are now version 6: the text font is stored in a portable form instead of Qt's
+  binary font format, which differs between Qt versions. Older projects still open; projects
+  saved by this version need this version or newer.
+- Fully transparent layers are stored without image data, so projects are smaller.
+
 ## 0.3.1 — 2026-10-09
 
 ### Fixed
-Opening damaged or malicious files is now safe. A fuzzing campaign (over 115,000 corrupted files,
+Opening damaged files is much safer (some deliberately crafted files could still crash PairPaint
+or use too much memory; fixed in 0.3.2). A fuzzing campaign (over 115,000 corrupted files,
 run with AddressSanitizer and UndefinedBehaviorSanitizer) found and fixed:
 - A PSD that could freeze PairPaint for minutes (a layer name claiming ~4 billion characters).
 - PSD layer bounds that overflowed, which could cause huge memory use.

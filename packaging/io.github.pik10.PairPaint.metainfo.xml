@@ -44,9 +44,14 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.2" date="2026-10-09" urgency="high">
+      <description>
+        <p>More security fixes: specially crafted files can no longer crash PairPaint or exhaust its memory. Project files are now version 6.</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-10-09" urgency="high">
       <description>
-        <p>Security and stability fixes: damaged or malicious image files can no longer crash or freeze PairPaint.</p>
+        <p>Security and stability fixes: damaged image files found by fuzzing no longer crash or freeze PairPaint.</p>
       </description>
     </release>
     <release version="0.3.0" date="2026-10-09">

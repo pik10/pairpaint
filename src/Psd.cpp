@@ -88,11 +88,6 @@ public:
         m_in.resetStatus();  // a skipped damaged block shouldn't affect what follows
     }
     void skip(qint64 n) { seek(m_file.pos() + n); }
-    void check() const
-    {
-        if (m_in.status() != QDataStream::Ok)
-            throw QObject::tr("The file is truncated or damaged.");
-    }
 
 private:
     template <typename T>
@@ -173,6 +168,10 @@ QByteArray readChannel(Reader &r, int compression, int w, int h, int depth, qint
     case 3: {
         QByteArray packed = r.bytes(len);
         const quint32 expected = quint32(bpr) * h;
+        // Deflate expands at most about 1032:1, so a bigger claim is a lie; reject it before
+        // qUncompress allocates the claimed size.
+        if (qint64(expected) > qint64(packed.size()) * 1100 + 65536)
+            throw QObject::tr("The file is damaged (compressed data too short).");
         QByteArray header(4, 0);
         qToBigEndian(expected, header.data());
         QByteArray out = qUncompress(header + packed);
@@ -198,6 +197,16 @@ QByteArray readChannel(Reader &r, int compression, int w, int h, int depth, qint
     default:
         throw QObject::tr("Unsupported compression method %1.").arg(compression);
     }
+}
+
+// A premultiplied canvas-size image filled with `color`, or an error message if memory runs out.
+QImage newImage(const QSize &size, const QColor &color)
+{
+    QImage img(size, QImage::Format_ARGB32_Premultiplied);
+    if (img.isNull())
+        throw QObject::tr("Not enough memory to open this file.");
+    img.fill(color);
+    return img;
 }
 
 // Builds a straight-alpha ARGB32 image (size `canvas`) from channel planes covering `rect`.
@@ -249,6 +258,7 @@ public:
 
     QVariantMap descriptor()
     {
+        const Nesting nest(m_depth);
         unicode();  // class name
         QVariantMap map;
         map.insert(QStringLiteral("_class"), id());
@@ -261,6 +271,18 @@ public:
     }
 
 private:
+    // Objects and lists can nest; a damaged file could nest them deep enough to overflow the
+    // stack, while real descriptors are only a few levels deep.
+    struct Nesting {
+        explicit Nesting(int &depth) : m_depth(depth)
+        {
+            if (++m_depth > 64)
+                throw QObject::tr("Damaged descriptor.");
+        }
+        ~Nesting() { --m_depth; }
+        int &m_depth;
+    };
+
     QString unicode()
     {
         const quint32 n = m_r.u32();
@@ -285,6 +307,7 @@ private:
         if (type == "Objc" || type == "GlbO")
             return descriptor();
         if (type == "VlLs") {
+            const Nesting nest(m_depth);
             QVariantList list;
             const quint32 n = m_r.u32();
             for (quint32 k = 0; k < n; ++k)
@@ -346,6 +369,7 @@ private:
     }
 
     Reader &m_r;
+    int m_depth = 0;
 };
 
 double num(const QVariantMap &m, const char *key, double fallback = 0)
@@ -652,13 +676,19 @@ QImage readMergedImage(Reader &r, qint64 offset, int channelCount, int width, in
     const int colorChannels = colorMode == 4 ? 4 : colorMode == 1 ? 1 : 3;
     const int bpr = width * depth / 8;
     if (compression == 1) {
-        QList<int> counts(channelCount * height);
+        QList<int> counts(qsizetype(channelCount) * height);
         for (int &c : counts)
             c = r.u16();
         for (int c = 0; c < channelCount; ++c) {
+            // PackBits expands at most 128 bytes from 2, so the rows must hold enough data.
+            qint64 total = 0;
+            for (int y = 0; y < height; ++y)
+                total += counts[qsizetype(c) * height + y];
+            if (qint64(bpr) * height > 64 * total + height)
+                throw QObject::tr("The file is damaged (compressed data too short).");
             QByteArray plane;
             for (int y = 0; y < height; ++y) {
-                const QByteArray row = r.bytes(counts[c * height + y]);
+                const QByteArray row = r.bytes(counts[qsizetype(c) * height + y]);
                 int pos = 0;
                 plane.append(unpackBits(row, pos, bpr));
             }
@@ -674,7 +704,6 @@ QImage readMergedImage(Reader &r, qint64 offset, int channelCount, int width, in
     } else {
         throw QObject::tr("Unsupported compression of the merged image.");
     }
-    r.check();
     QImage img = assemble(planes, QRect(QPoint(0, 0), size), size, colorMode);
     if (planes.contains(-1)) {
         // Photoshop stores the merged colors blended with white where they are transparent;
@@ -705,6 +734,8 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
         throw QObject::tr("Unknown PSD version %1.").arg(version);
     r.skip(6);
     const int channelCount = r.u16();
+    if (channelCount < 1 || channelCount > 56)  // the limits Photoshop documents
+        throw QObject::tr("The file is damaged (invalid channel count).");
     const int height = int(r.u32());
     const int width = int(r.u32());
     const int depth = r.u16();
@@ -800,8 +831,14 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                 r.seek(extraEnd);
                 records.append(rec);
             }
-            r.check();
 
+            // Every layer is a full-canvas image. Layers without pixels of their own (groups,
+            // adjustments, empty layers) share one blank image; the rest count against a budget,
+            // so a small file can't claim thousands of huge layers.
+            const QImage blank = newImage(size, Qt::transparent);
+            QImage white;
+            FileIO::PixelBudget budget;
+            const qint64 canvasPixels = qint64(width) * height;
             for (const LayerRecord &rec : records) {
                 QMap<int, QByteArray> planes;
                 for (const ChannelInfo &ch : rec.channels) {
@@ -828,14 +865,23 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                 l.visible = !(rec.flags & 2);
                 l.clipped = rec.clipped && l.kind == LayerKind::Normal;
                 l.mode = modeForKey(l.isGroup() && !rec.sectionBlendKey.isEmpty() ? rec.sectionBlendKey : rec.blendKey);
-                l.image = assemble(planes, rec.rect, size, colorMode).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                const bool hasPixels = l.kind == LayerKind::Normal && rec.adjustment.type == Adjustment::None
+                                       && !(rec.rect & QRect(QPoint(0, 0), size)).isEmpty();
+                if (hasPixels) {
+                    budget.take(canvasPixels);
+                    l.image = assemble(planes, rec.rect, size, colorMode).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                } else {
+                    l.image = blank;
+                }
                 if (rec.adjustment.type != Adjustment::None) {
-                    l.adjustment = rec.adjustment;
-                    l.image.fill(Qt::transparent);  // adjustment layers have no pixels of their own
-                } else if (rec.fillColor.isValid() && (!rec.vectorMask.isEmpty() || alphaBounds(l.image).isEmpty())) {
+                    l.adjustment = rec.adjustment;  // adjustment layers have no pixels of their own
+                } else if (l.kind == LayerKind::Normal && rec.fillColor.isValid()
+                           && (!rec.vectorMask.isEmpty() || alphaBounds(l.image).isEmpty())) {
                     // Solid color fill layers, including shape layers (a fill cut out by a vector
                     // outline): rebuilt the way Photoshop renders them, so edges are exact.
-                    l.image.fill(rec.fillColor);
+                    if (!hasPixels)
+                        budget.take(canvasPixels);
+                    l.image = newImage(size, rec.fillColor);
                 } else if (!rec.unsupported.isEmpty()) {
                     notes << rec.unsupported;
                 } else if (!rec.fillWithoutPixelsNote.isEmpty() && alphaBounds(l.image).isEmpty()) {
@@ -845,8 +891,8 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                 if (!rec.approximate.isEmpty())
                     notes << rec.approximate;
                 if (planes.contains(-2) && !rec.maskRect.isEmpty()) {
-                    QImage mask(size, QImage::Format_ARGB32_Premultiplied);
-                    mask.fill(QColor(rec.maskDefault, rec.maskDefault, rec.maskDefault));
+                    budget.take(canvasPixels);
+                    QImage mask = newImage(size, QColor(rec.maskDefault, rec.maskDefault, rec.maskDefault));
                     const QByteArray &m = planes[-2];
                     const QRect visible = rec.maskRect & mask.rect();
                     if (m.size() >= qint64(rec.maskRect.width()) * rec.maskRect.height()) {
@@ -863,6 +909,7 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                 }
                 if (!rec.vectorMask.isEmpty()) {
                     // Shape layers: the vector outline becomes (part of) the layer mask.
+                    budget.take(canvasPixels);
                     const QImage vector = vectorMaskImage(rec.vectorMask, false, size);
                     if (l.mask.isNull()) {
                         l.mask = vector;
@@ -874,13 +921,13 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
                     l.maskEnabled = true;
                 }
                 if (l.isAdjustment() && l.mask.isNull()) {
-                    l.mask = QImage(size, QImage::Format_ARGB32_Premultiplied);
-                    l.mask.fill(Qt::white);
+                    if (white.isNull())
+                        white = newImage(size, Qt::white);
+                    l.mask = white;  // shared until painted on
                 }
                 sanitizeLayer(l);
                 state.layers.append(l);  // PSD stores layers bottom to top
             }
-            r.check();
         }
     }
 

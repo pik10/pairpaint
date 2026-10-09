@@ -388,8 +388,8 @@ void sanitizeLayer(Layer &l)
             || std::abs(l.text.pos.x()) > 1e6 || std::abs(l.text.pos.y()) > 1e6)
             l.text.pos = QPointF();
     }
-    if (l.adjustment.params.size() > 1000)
-        l.adjustment.params.resize(1000);
+    if (l.adjustment.params.size() > Adjustments::kMaxParams)
+        l.adjustment.params.resize(Adjustments::kMaxParams);
 }
 
 int LayerStyle::margin() const

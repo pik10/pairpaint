@@ -87,10 +87,15 @@ QList<int> validated(Adjustment::Type type, QList<int> v)
         break;
     case Adjustment::HueSaturation:
         for (int i = 0; i < v.size(); ++i) {
-            if (i < 3)
+            if (i < 3) {
                 v[i] = std::clamp(v[i], ranges[i].min, ranges[i].max);
-            else  // color ranges: four hues (0..360), then hue, saturation, lightness
-                v[i] = (i - 3) % 7 < 4 ? std::clamp(v[i], 0, 360) : std::clamp(v[i], (i - 3) % 7 == 4 ? -180 : -100, (i - 3) % 7 == 4 ? 180 : 100);
+            } else {
+                // Color ranges, seven values each: four hues, then hue, saturation, lightness.
+                static constexpr int lo[7] = {0, 0, 0, 0, -180, -100, -100};
+                static constexpr int hi[7] = {360, 360, 360, 360, 180, 100, 100};
+                const int k = (i - 3) % 7;
+                v[i] = std::clamp(v[i], lo[k], hi[k]);
+            }
         }
         break;
     case Adjustment::BrightnessContrast:

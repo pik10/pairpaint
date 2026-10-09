@@ -810,6 +810,198 @@ static void testDamagedFiles()
     CHECK(!Adjustments::apply(gray, Adjustment::Curves, {0, 0, 255, 255, -1, 500000, 3}).isNull());
 }
 
+// Builds PSD files by hand, for the attacks a mutation fuzzer is unlikely to stumble on.
+namespace psdbuild {
+struct Out {
+    QByteArray b;
+    Out &u8(int v) { b.append(char(v)); return *this; }
+    Out &u16(int v) { return u8(v >> 8).u8(v); }
+    Out &u32(quint32 v) { return u16(int(v >> 16)).u16(int(v & 0xffff)); }
+    Out &raw(const QByteArray &d) { b.append(d); return *this; }
+};
+QByteArray header(int channels, int w, int h)
+{
+    Out o;
+    o.raw("8BPS").u16(1).raw(QByteArray(6, 0)).u16(channels).u32(h).u32(w).u16(8).u16(3);
+    o.u32(0).u32(0);  // color mode data, image resources
+    return o.b;
+}
+struct LayerSpec {
+    QRect rect;
+    QByteArray extra;                  // tagged blocks
+    QList<QPair<int, QByteArray>> ch;  // channel id, data including the compression field
+};
+QByteArray file(int w, int h, const QList<LayerSpec> &layers)
+{
+    Out info;
+    info.u16(layers.size());
+    for (const LayerSpec &l : layers) {
+        info.u32(l.rect.top()).u32(l.rect.left()).u32(l.rect.top() + l.rect.height()).u32(l.rect.left() + l.rect.width());
+        info.u16(l.ch.size());
+        for (const auto &c : l.ch)
+            info.u16(c.first).u32(c.second.size());
+        info.raw("8BIMnorm").u8(255).u8(0).u8(0).u8(0);
+        Out extra;
+        extra.u32(0).u32(0).u8(3).raw("L01");  // no mask, no blending ranges, name padded to 4
+        extra.raw(l.extra);
+        info.u32(extra.b.size()).raw(extra.b);
+    }
+    for (const LayerSpec &l : layers)
+        for (const auto &c : l.ch)
+            info.raw(c.second);
+    if (info.b.size() % 2)
+        info.u8(0);
+    Out o;
+    o.raw(header(3, w, h));
+    o.u32(4 + info.b.size() + 4).u32(info.b.size()).raw(info.b).u32(0);
+    o.u16(0).raw(QByteArray(qsizetype(3) * w * h, 0));  // merged image, raw
+    return o.b;
+}
+QByteArray block(const char *key, const QByteArray &data)
+{
+    Out o;
+    o.raw("8BIM").raw(key).u32(data.size()).raw(data);
+    if (data.size() % 2)
+        o.u8(0);
+    return o.b;
+}
+} // namespace psdbuild
+
+// Files built to exhaust memory, time or the stack (found by code review, not by the fuzzer).
+static void testHostileFiles()
+{
+    using namespace psdbuild;
+    QString err, warn;
+    auto load = [&](const QByteArray &bytes, const QString &ext) -> Document * {
+        const QString path = tmpPath(qPrintable(QStringLiteral("hostile.") + ext));
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            return nullptr;
+        f.write(bytes);
+        f.close();
+        return FileIO::load(path, &err, &warn);
+    };
+    auto loads = [&](const QByteArray &bytes, const QString &ext) {
+        Document *d = load(bytes, ext);
+        delete d;
+        return d != nullptr;
+    };
+
+    // A sanity check of the builder: one 2x2 white layer.
+    {
+        LayerSpec l{QRect(1, 1, 2, 2), {}, {}};
+        for (int id : {0, 1, 2, -1})
+            l.ch.append({id, Out().u16(0).raw(QByteArray(4, char(255))).b});
+        Document *d = load(file(4, 4, {l}), "psd");
+        CHECK(d && d->layerCount() == 1 && px(d, 1, 1, 0) == QColor(Qt::white) && px(d, 0, 0, 0).alpha() == 0);
+        delete d;
+    }
+
+    // Effects nested 100,000 levels deep used to overflow the stack. Now the effects are
+    // dropped and the layer still opens.
+    {
+        Out d;
+        d.u32(0).u32(16);  // effects version, descriptor version
+        const int depth = 100000;
+        for (int k = 0; k < depth; ++k)
+            d.u32(0).u32(0).raw("null").u32(1).u32(0).raw("key ").raw("Objc");
+        d.u32(0).u32(0).raw("null").u32(0);
+        LayerSpec l{QRect(0, 0, 2, 2), block("lfx2", d.b), {}};
+        CHECK(loads(file(4, 4, {l}), "psd"));
+    }
+
+    // Thousands of tiny layers on a big canvas: each is a full-canvas image in memory.
+    FileIO::setMaxImagePixels(4'000'000);
+    {
+        QList<LayerSpec> empty(2000, LayerSpec{QRect(), {}, {}});
+        QElapsedTimer t;
+        t.start();
+        Document *d = load(file(2000, 2000, empty), "psd");
+        CHECK(d && d->layerCount() == 2000);  // layers without pixels share one image
+        delete d;
+        QList<LayerSpec> tiny(2000, LayerSpec{QRect(5, 5, 1, 1), {}, {}});
+        CHECK(!loads(file(2000, 2000, tiny), "psd") && err.contains("too large to open"));
+        CHECK(t.elapsed() < 10000);
+    }
+    // A few kilobytes of ZIP data claiming a 4-megapixel channel.
+    {
+        LayerSpec l{QRect(0, 0, 2000, 2000), {}, {{0, Out().u16(2).raw(qCompress(QByteArray(1000, 0)).mid(4)).b}}};
+        CHECK(!loads(file(2000, 2000, {l}), "psd") && err.contains("compressed data too short"));
+    }
+    // The flattened image: an impossible channel count, and RLE rows claiming far more than they hold.
+    {
+        QByteArray tooMany = header(500, 100, 100);
+        tooMany += Out().u32(0).u16(0).raw(QByteArray(100, 0)).b;
+        CHECK(!loads(tooMany, "psd") && err.contains("channel count"));
+        Out rle;
+        rle.raw(header(56, 2000, 2000)).u32(0).u16(1);
+        for (int k = 0; k < 56 * 2000; ++k)
+            rle.u16(0);
+        CHECK(!loads(rle.b, "psd") && err.contains("compressed data too short"));
+    }
+    // Projects: empty layers are free, painted ones count.
+    {
+        DocState s;
+        s.size = QSize(2000, 2000);
+        Layer blank;
+        blank.image = QImage(s.size, QImage::Format_ARGB32_Premultiplied);
+        blank.image.fill(Qt::transparent);
+        s.layers = QList<Layer>(40, blank);
+        {
+            Document d(s);
+            CHECK(FileIO::saveProject(&d, tmpPath("many-empty.pairpaint"), &err));
+        }
+        Document *d = FileIO::load(tmpPath("many-empty.pairpaint"), &err, &warn);
+        CHECK(d && d->layerCount() == 40);
+        delete d;
+        for (Layer &l : s.layers) {
+            l.image = QImage(s.size, QImage::Format_ARGB32_Premultiplied);
+            l.image.fill(Qt::transparent);
+            l.image.setPixelColor(7, 7, Qt::red);
+        }
+        {
+            Document painted(s);
+            CHECK(FileIO::saveProject(&painted, tmpPath("many-painted.pairpaint"), &err));
+        }
+        CHECK(!FileIO::load(tmpPath("many-painted.pairpaint"), &err, &warn) && err.contains("too large to open"));
+    }
+    FileIO::setMaxImagePixels(250'000'000);
+
+    // Fonts are stored as text since version 6; check they survive, and that version 5
+    // projects (which stored a serialized QFont) still open with their text.
+    {
+        Document d(QSize(200, 100), Qt::white);
+        TextData t;
+        t.text = QStringLiteral("Hello");
+        t.font = QFont(QStringLiteral("Sans Serif"));
+        t.font.setPixelSize(37);
+        t.font.setBold(true);
+        t.font.setItalic(true);
+        t.color = Qt::blue;
+        t.pos = QPointF(10, 20);
+        d.addTextLayer(t);
+        CHECK(FileIO::saveProject(&d, tmpPath("font.pairpaint"), &err));
+        Document *back = FileIO::load(tmpPath("font.pairpaint"), &err, &warn);
+        const TextData *bt = back && back->layerCount() == 2 ? &back->layer(1).text : nullptr;
+        CHECK(bt && bt->text == t.text && bt->font.pixelSize() == 37 && bt->font.bold() && bt->font.italic()
+              && bt->font.family() == t.font.family() && bt->color == t.color && bt->pos == t.pos);
+        delete back;
+        Document *old = FileIO::load(QStringLiteral(PAIRPAINT_TEST_DATA) + "/fuzz/seed-full.pairpaint", &err, &warn);
+        bool hasText = false;
+        if (old)
+            for (const Layer &l : old->state().layers)
+                hasText |= l.text.isValid() && l.text.font.pixelSize() > 0;
+        CHECK(old && hasText);
+        delete old;
+    }
+
+    // Out-of-range Hue/Saturation color ranges are clamped by position in each range.
+    QList<int> hs = Adjustments::defaults(Adjustment::HueSaturation);
+    hs << 999 << -5 << 400 << 10 << 999 << -999 << 500;
+    hs = Adjustments::validated(Adjustment::HueSaturation, hs);
+    CHECK(hs.mid(3, 7) == QList<int>({360, 0, 360, 10, 180, -100, 100}));
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);  // keep the user's real settings untouched
@@ -1175,6 +1367,7 @@ int main(int argc, char **argv) {
     testToolPack(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
+    testHostileFiles();
     {
         // Regression: destroying a window with unsaved changes used to crash.
         auto *other = new MainWindow;
