@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-09
 
 ### New
 - **Auto Tone**, **Auto Contrast** and **Auto Color** (Image > Adjustments): one-click fixes for

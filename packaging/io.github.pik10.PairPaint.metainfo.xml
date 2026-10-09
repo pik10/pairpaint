@@ -45,6 +45,16 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-10-09">
+      <description>
+        <p>Basic photo fixes.</p>
+        <ul>
+          <li>One-click Auto Tone, Auto Contrast and Auto Color</li>
+          <li>White Balance, Vibrance, Exposure and Color Balance adjustments and adjustment layers</li>
+          <li>Quality setting for JPEG and WebP export</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-10-09" urgency="high">
       <description>
         <p>More security fixes: specially crafted files can no longer crash PairPaint or exhaust its memory. Project files are now version 6.</p>
