@@ -51,6 +51,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.2" date="2026-10-09">
+      <description>
+        <p>Built with Qt 6.12, the current long-term support release, for the latest fixes including security fixes in image decoding.</p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-10-09">
       <description>
         <p>Filling a rectangle or ellipse with the Paint Bucket no longer leaves a thin light gap inside its outline.</p>

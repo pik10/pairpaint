@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 — 2026-10-09
 
 ### Changed
 - Built with Qt 6.12, the current long-term support release, on all systems (the Windows and
