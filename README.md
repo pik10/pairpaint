@@ -7,16 +7,25 @@ Runs on Linux, Windows and macOS from the same source.
 
 ## Download
 
-**Linux:** download `PairPaint-<version>-x86_64.AppImage` from the
-[latest release](../../releases/latest), then:
+Get the latest version from the [Releases page](../../releases/latest).
+
+**Windows** (10 and 11, 64-bit): `PairPaint-<version>-windows-x64-setup.exe` installs PairPaint with a
+Start menu entry. Prefer no installation? Use the `.zip`, unzip it and run `pairpaint.exe`.
+The downloads aren't code-signed yet, so Windows may show *"Windows protected your PC"*:
+click **More info → Run anyway**.
+
+**macOS** (Apple Silicon and Intel): open `PairPaint-<version>-macos-universal.dmg` and drag PairPaint
+to Applications. The app isn't notarized by Apple yet, so the first launch is blocked: open
+**System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the PairPaint message.
+
+**Linux** (most distributions): download `PairPaint-<version>-x86_64.AppImage`, then:
 
 ```sh
 chmod +x PairPaint-*.AppImage
 ./PairPaint-*.AppImage
 ```
 
-No installation needed; it runs on most distributions from the last few years.
-Windows and macOS downloads are coming; meanwhile you can [build from source](#building).
+You can also [build from source](#building).
 
 ## Features
 

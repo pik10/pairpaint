@@ -1,0 +1,2 @@
+// Embeds the app icon into pairpaint.exe (shown in Explorer, the taskbar and shortcuts).
+IDI_ICON1 ICON "pairpaint.ico"

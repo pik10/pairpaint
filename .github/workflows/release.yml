@@ -1,8 +1,8 @@
-# Builds release downloads.
+# Builds release downloads for Linux, Windows and macOS.
 #
-# - Pushing a tag like v0.1.0 builds the AppImage and publishes it on a GitHub Release.
-# - Running the workflow by hand (Actions tab > Release > Run workflow) only builds it,
-#   as a downloadable artifact, without publishing anything.
+# - Pushing a tag like v0.1.0 builds everything and publishes it on a GitHub Release.
+# - Running the workflow by hand (Actions tab > Release > Run workflow) only builds the
+#   downloads, as artifacts on the run page, without publishing anything.
 name: Release
 
 on:
@@ -14,10 +14,9 @@ permissions:
   contents: write  # needed to create the GitHub Release
 
 jobs:
-  linux-appimage:
+  linux:
     # Build on an older Ubuntu: the AppImage then also runs on older distributions.
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +24,14 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.*'  # long-term support release
+          modules: qtimageformats  # WebP, TIFF and more
           cache: true
+
+      - name: Version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || v="dev-${GITHUB_SHA::7}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
@@ -48,31 +54,150 @@ jobs:
           EXTRA_PLATFORM_PLUGINS: libqwayland-egl.so;libqwayland-generic.so
           EXTRA_QT_PLUGINS: wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          [[ "$GITHUB_REF_TYPE" == tag ]] || version="dev-${GITHUB_SHA::7}"
-          export OUTPUT="PairPaint-${version}-x86_64.AppImage"
+          export OUTPUT="PairPaint-${VERSION}-x86_64.AppImage"
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
-          ls -la "$OUTPUT"
+          ls AppDir/usr/plugins/imageformats
 
       - name: Smoke test
         env:
           QT_QPA_PLATFORM: offscreen
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: |
-          chmod +x PairPaint-*.AppImage
-          ./PairPaint-*.AppImage --version
+        run: ./PairPaint-*.AppImage --version
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PairPaint-AppImage
+          name: PairPaint-Linux
           path: PairPaint-*.AppImage
 
-      - name: Publish release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
         with:
-          files: PairPaint-*.AppImage
+          version: '6.8.*'
+          modules: qtimageformats
+          cache: true
+
+      - name: Version
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || v="dev-${GITHUB_SHA::7}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DPAIRPAINT_BUILD_TESTS=OFF
+          cmake --build build --config Release --parallel
+
+      - name: Collect the app and everything it needs
+        shell: pwsh
+        run: |
+          $dist = "dist\PairPaint"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item build\Release\pairpaint.exe $dist
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-compiler-runtime "$dist\pairpaint.exe"
+          # Ship the Visual C++ runtime next to the exe, so users don't have to install it.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
+          Copy-Item "$($crt.FullName)\*.dll" $dist
+          Copy-Item LICENSE "$dist\LICENSE.txt"
+          Get-ChildItem "$dist\imageformats" | Select-Object -ExpandProperty Name
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process -PassThru "dist\PairPaint\pairpaint.exe"
+          Start-Sleep -Seconds 8
+          $p.Refresh()
+          Write-Host "Running: $(-not $p.HasExited)  window title: '$($p.MainWindowTitle)'"
+          # A missing DLL makes Windows show a "System Error" box instead of the app.
+          if ($p.HasExited -or $p.MainWindowTitle -match 'Error') { exit 1 }
+          Stop-Process -Id $p.Id
+
+      - name: Zip and installer
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\PairPaint -DestinationPath "PairPaint-$env:VERSION-windows-x64.zip"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /Q "/DAppVersion=$env:VERSION" "/DSourceDir=$PWD\dist\PairPaint" "/O$PWD" packaging\windows\pairpaint.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem PairPaint-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PairPaint-Windows
+          path: |
+            PairPaint-*-windows-x64.zip
+            PairPaint-*-windows-x64-setup.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.*'  # Qt 6.8 links Apple's removed AGL framework
+          modules: qtimageformats
+          cache: true
+
+      - name: Version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || v="dev-${GITHUB_SHA::7}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build (Apple Silicon + Intel)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPAIRPAINT_BUILD_TESTS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build --parallel
+
+      - name: Bundle Qt into the app
+        run: |
+          app=build/PairPaint.app
+          "$QT_ROOT_DIR/bin/macdeployqt" "$app"
+          # Ad-hoc signature: required on Apple Silicon after macdeployqt edits the binaries.
+          # (Not a Developer ID signature, so Gatekeeper still asks on first launch.)
+          codesign --force --deep --sign - "$app"
+          lipo -info "$app/Contents/MacOS/PairPaint"
+          ls "$app/Contents/PlugIns/imageformats"
+
+      - name: Smoke test
+        run: build/PairPaint.app/Contents/MacOS/PairPaint --version
+
+      - name: Disk image
+        run: |
+          mkdir dmg
+          cp -R build/PairPaint.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname PairPaint -srcfolder dmg -ov -format UDZO "PairPaint-${VERSION}-macos-universal.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PairPaint-macOS
+          path: PairPaint-*.dmg
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: downloads/*
           generate_release_notes: true
