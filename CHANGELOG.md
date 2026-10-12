@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-10-11
 
 ### New
 - **Background Eraser** (Shift+E): drag it along an object's edge with the + in its center over
