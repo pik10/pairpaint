@@ -185,6 +185,17 @@ QIcon toolIcon(Tool::Id id)
         p.drawRect(-22, -11, 44, 22);
         p.fillRect(QRectF(-22, -11, 18, 22), ink);
         break;
+    case Tool::BackgroundEraser:
+        // A small eraser over a checkerboard: the transparency it leaves behind.
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 3; ++x)
+                if ((x + y) % 2 == 0)
+                    p.fillRect(QRectF(36 + x * 8, 36 + y * 8, 8, 8), ink);
+        p.translate(22, 22);
+        p.rotate(-45);
+        p.drawRect(-17, -8, 34, 16);
+        p.fillRect(QRectF(-17, -8, 14, 16), ink);
+        break;
     case Tool::Fill: {
         p.translate(28, 34);
         p.rotate(-30);

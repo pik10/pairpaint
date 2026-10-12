@@ -27,6 +27,8 @@ public:
     bool radial = false;
     int toneRange = 1;             // Dodge/Burn: 0 shadows, 1 midtones, 2 highlights
     bool spongeSaturate = false;   // Sponge: add saturation (true) or remove it
+    bool sampleOnce = false;       // Background Eraser: erase the color clicked first, not the one under the brush
+    bool protectForeground = false;  // Background Eraser: never erase the foreground color
     double cropRatio = 0;          // Crop: width / height, 0 = free, -1 = the image's own ratio
     bool pressureSize = true;      // pen pressure controls brush size
     bool pressureOpacity = false;  // pen pressure controls brush opacity

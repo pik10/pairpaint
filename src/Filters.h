@@ -62,6 +62,15 @@ QImage heal(const QImage &source, const QImage &dest, const QImage &mask, double
 // within `tolerance` (0..255 per channel). Returns a Format_Alpha8 mask.
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous);
 
+// How much of each pixel of a layer shows (Format_Alpha8): its alpha, times its layer mask
+// (grayscale, white reveals) unless `mask` is null.
+QImage layerCoverage(const QImage &image, const QImage &mask);
+
+// Decontaminate Colors: gives the soft edge pixels of a cut-out object (partly covered by
+// `coverage`, from layerCoverage) the colors of the solid object next to them, so no tint of
+// the old background shows around it. `amount` 0..100. Alpha is unchanged.
+QImage decontaminate(const QImage &src, const QImage &coverage, int amount);
+
 // The Paint Bucket's coverage: `region` (from floodMask) plus the soft edge pixels around it,
 // each covered as much as it is made of the clicked color (it is a mix of that color and the
 // border next to it), so a fill meets anti-aliased outlines without a light gap.

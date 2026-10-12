@@ -51,6 +51,7 @@
 #include <QUndoView>
 #include <QVBoxLayout>
 #include <QtMath>
+#include <algorithm>
 #include <memory>
 
 namespace {
@@ -62,10 +63,11 @@ QList<int> optionsForTool(int id)
     using T = Tool;
     // Same order as MainWindow::Option.
     enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range,
-           Sponge, CropRatio, Smoothing };
+           Sponge, CropRatio, Smoothing, Sampling, Protect };
     switch (id) {
     case T::Brush:
     case T::Eraser: return {Size, Hardness, Opacity, Smoothing, Pressure};
+    case T::BackgroundEraser: return {Size, Hardness, Sampling, Tolerance, Contiguous, Protect, Smoothing, Pressure};
     case T::CloneStamp:
     case T::Healing: return {Size, Hardness, Opacity, Smoothing, SampleMerged, Pressure};
     case T::Smudge:
@@ -366,6 +368,8 @@ void MainWindow::createMenus()
         withDoc([](Document *d) { d->rasterizeLayer(d->activeIndex()); });
     });
     layer->addSeparator();
+    QMenu *matting = layer->addMenu(tr("Matti&ng"));
+    addAction(matting, tr("&Decontaminate Colors…"), {}, [this] { decontaminateColors(); });
     QMenu *maskMenu = layer->addMenu(tr("Layer M&ask"));
     addAction(maskMenu, tr("&Reveal All"), {}, [this] { withDoc([](Document *d) { d->addMask(false); }); });
     addAction(maskMenu, tr("Reveal &Selection"), {}, [this] { withDoc([](Document *d) { d->addMask(true); }); });
@@ -655,6 +659,17 @@ void MainWindow::createOptionsBar()
     sponge->addItems({tr("Desaturate"), tr("Saturate")});
     connect(sponge, &QComboBox::currentIndexChanged, this, [s](int v) { s->spongeSaturate = v == 1; });
     m_optionActions[OptSponge] = labelled(tr("Mode:"), sponge);
+
+    auto *sampling = new QComboBox;
+    sampling->addItems({tr("Continuous"), tr("Once")});
+    sampling->setCurrentIndex(s->sampleOnce ? 1 : 0);
+    sampling->setToolTip(tr("Continuous: erases the color under the + as it moves. "
+                            "Once: erases only the color clicked first."));
+    connect(sampling, &QComboBox::currentIndexChanged, this, [s](int v) { s->sampleOnce = v == 1; });
+    m_optionActions[OptSampling] = labelled(tr("Sampling:"), sampling);
+    check(OptProtect, tr("Protect foreground color"), s->protectForeground, [s](bool v) { s->protectForeground = v; });
+    bar->widgetForAction(m_optionActions[OptProtect])->setToolTip(
+        tr("Never erases the foreground color: pick a color of the object with the Eyedropper to keep it safe."));
 
     auto *ratio = new QComboBox;
     const QList<QPair<QString, double>> ratios = {
@@ -1282,6 +1297,32 @@ void MainWindow::colorRange()
         FilterDialog dlg(tr("Color Range (foreground color %1)").arg(color.name()),
                          new SliderEditor({{tr("Fuzziness"), 0, 255, 40, {}}}), target, this);
         dlg.exec();
+    });
+}
+
+void MainWindow::decontaminateColors()
+{
+    withDoc([&](Document *d) {
+        if (!hasPixels(d))
+            return;
+        if (d->editingMask())
+            d->setEditingMask(false);  // it recolors the layer's pixels, guided by the mask
+        const Layer &l = d->activeLayer();
+        const QImage coverage = Filters::layerCoverage(l.image, l.maskEnabled ? l.mask : QImage());
+        bool soft = false;
+        for (int y = 0; y < coverage.height() && !soft; ++y) {
+            const uchar *c = coverage.constScanLine(y);
+            soft = std::any_of(c, c + coverage.width(), [](uchar v) { return v > 0 && v < 250; });
+        }
+        if (!soft) {
+            QMessageBox::information(this, tr("Decontaminate Colors"),
+                                     tr("This layer has no soft edges to clean up.\n\nCut the object out first: "
+                                        "add a layer mask (Layer > Layer Mask > Reveal Selection) or erase "
+                                        "its background."));
+            return;
+        }
+        runFilter(tr("Decontaminate Colors"), {{tr("Amount"), 1, 100, 100, QStringLiteral("%")}},
+                  [coverage](const QImage &img, const QList<int> &v) { return Filters::decontaminate(img, coverage, v[0]); });
     });
 }
 

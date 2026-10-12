@@ -38,6 +38,8 @@ You can also [build from source](#building).
   Photoshop's Pass Through); move, duplicate, merge or ungroup whole groups
 - **Layer styles** (non-destructive): Drop Shadow, Outer Glow, Stroke
 - **Layer masks**: reveal all / from selection, paint on the mask with any tool, disable, apply, delete
+- **Cutting out objects**: the Background Eraser erases the background color around an object's edge
+  and leaves the object; Decontaminate Colors removes the old background's tint from soft edges
 - **Adjustment layers** (non-destructive, with masks): Brightness/Contrast, Levels, Curves, Exposure,
   Vibrance, Hue/Saturation, Color Balance, White Balance, Invert, Threshold, Posterize. Double-click one
   to edit it.
@@ -45,7 +47,7 @@ You can also [build from source](#building).
   (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
   editable when moved, and become pixels only when painted on
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Polygonal
-  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Eraser, Clone Stamp, Spot Healing
+  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Eraser, Background Eraser, Clone Stamp, Spot Healing
   Brush, Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)

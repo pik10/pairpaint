@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Background Eraser** (Shift+E): drag it along an object's edge with the + in its center over
+  the background. It erases the color under the +, fading out softly at the tolerance, and leaves
+  the object alone even where the brush covers it. Options: Sampling *Continuous* (follows the
+  color under the +, for backgrounds that change) or *Once* (only the color clicked first),
+  Tolerance, Contiguous (only background connected to the +) and Protect foreground color.
+- **Layer > Matting > Decontaminate Colors**: after cutting an object out (with a layer mask or by
+  erasing its background), the soft edge pixels still carry some of the old background's color,
+  which shows as a halo on a new background. This gives them the colors of the object next to
+  them instead, with a live preview and an Amount setting.
+
 ## 0.7.4 — 2026-10-09
 
 ### Changed

@@ -946,6 +946,129 @@ static void testToolPack(MainWindow &w, ToolManager *tools, ToolSettings *settin
 }
 
 
+// Cutting objects out: the Background Eraser and Decontaminate Colors.
+static void testCutout(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    auto newDoc = [&](const QImage &img) {
+        w.addDocument(new Document(img));
+        auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+        c->fitToWindow();
+        return c;
+    };
+    // A red object (left) on a white background (right).
+    QImage img(200, 120, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::white);
+    QPainter p(&img);
+    p.fillRect(0, 0, 100, 120, Qt::red);
+    p.end();
+    Canvas *c = newDoc(img);
+    Document *d = c->document();
+    settings->size = 30;
+    settings->hardness = 100;
+    settings->tolerance = 32;
+    settings->contiguous = true;
+    settings->sampleOnce = false;
+    settings->protectForeground = false;
+    tools->setCurrent(Tool::BackgroundEraser);
+
+    // Continuous: the brush runs over the edge with its center on the background.
+    drag(c, {105, 20}, {105, 100});
+    CHECK(px(d, 110, 60).alpha() == 0);                                   // background erased
+    CHECK(px(d, 92, 60) == QColor(Qt::red));                              // object untouched under the brush
+    CHECK(px(d, 150, 60).alpha() == 255);                                 // outside the brush
+    CHECK(d->undoStack()->undoText() == "Background Eraser");
+    d->undoStack()->undo();
+
+    // Once: the color clicked first is erased, even when the center moves onto the object.
+    settings->sampleOnce = true;
+    drag(c, {110, 20}, {90, 100});
+    CHECK(px(d, 110, 25).alpha() == 0);
+    CHECK(px(d, 90, 95) == QColor(Qt::red));
+    d->undoStack()->undo();
+    // Continuous over the object would erase it.
+    settings->sampleOnce = false;
+    drag(c, {80, 60}, {80, 61});
+    CHECK(px(d, 80, 60).alpha() == 0);
+    d->undoStack()->undo();
+
+    // Protect foreground color: white is never erased.
+    settings->protectForeground = true;
+    settings->setForeground(Qt::white);
+    drag(c, {150, 20}, {150, 100});
+    CHECK(px(d, 150, 60).alpha() == 255);
+    settings->protectForeground = false;
+    settings->resetColors();
+
+    // Contiguous: white behind a red stripe (x 100..104) is out of reach.
+    {
+        QImage stripe(200, 120, QImage::Format_ARGB32_Premultiplied);
+        stripe.fill(Qt::white);
+        QPainter sp(&stripe);
+        sp.fillRect(100, 0, 5, 120, Qt::red);
+        sp.end();
+        Canvas *c2 = newDoc(stripe);
+        Document *d2 = c2->document();
+        settings->size = 40;
+        drag(c2, {90, 60}, {90, 61});
+        CHECK(px(d2, 85, 60).alpha() == 0 && px(d2, 108, 60).alpha() == 255);
+        d2->undoStack()->undo();
+        settings->contiguous = false;
+        drag(c2, {90, 60}, {90, 61});
+        CHECK(px(d2, 85, 60).alpha() == 0 && px(d2, 108, 60).alpha() == 0 && px(d2, 102, 60).alpha() == 255);
+        settings->contiguous = true;
+    }
+
+    // Not on a mask: nothing happens.
+    d->addMask(false);
+    CHECK(d->editingMask());
+    drag(c, {105, 20}, {105, 100});
+    CHECK(px(d, 110, 60).alpha() == 255 && d->undoStack()->undoText() != "Background Eraser");
+    d->undoStack()->undo();
+
+    // Decontaminate Colors: soft edge pixels of a green object still tinted by a blue background.
+    {
+        QImage obj(100, 20, QImage::Format_ARGB32);
+        obj.fill(Qt::transparent);
+        for (int y = 0; y < 20; ++y)
+            for (int x = 0; x < 60; ++x) {
+                if (x < 50)
+                    obj.setPixel(x, y, qRgba(0, 200, 0, 255));
+                else  // the edge: fading out, half green and half blue
+                    obj.setPixel(x, y, qRgba(0, 100, 120, 255 - (x - 49) * 25));
+            }
+        const QImage layer = obj.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        const QImage cov = Filters::layerCoverage(layer, QImage());
+        CHECK(cov.constScanLine(5)[20] == 255 && cov.constScanLine(5)[55] == 255 - 6 * 25 && cov.constScanLine(5)[70] == 0);
+        const QImage out = Filters::decontaminate(layer, cov, 100);
+        const QColor edge = out.pixelColor(52, 10);
+        CHECK(edge.blue() < 10 && edge.green() > 170 && std::abs(edge.alpha() - (255 - 3 * 25)) <= 1);
+        CHECK(out.pixelColor(20, 10) == QColor(0, 200, 0));               // the solid object is unchanged
+        const QColor half = Filters::decontaminate(layer, cov, 50).pixelColor(52, 10);
+        CHECK(half.blue() > 40 && half.blue() < 80);
+
+        // With a layer mask: an opaque photo cut out by a soft mask.
+        QImage photo(100, 20, QImage::Format_ARGB32_Premultiplied);
+        photo.fill(QColor(0, 0, 255));
+        QPainter pp(&photo);
+        pp.fillRect(0, 0, 50, 20, QColor(0, 200, 0));
+        pp.fillRect(50, 0, 5, 20, QColor(0, 100, 120));
+        pp.end();
+        QImage mask(100, 20, QImage::Format_ARGB32_Premultiplied);
+        mask.fill(Qt::black);
+        QPainter mp(&mask);
+        mp.fillRect(0, 0, 50, 20, Qt::white);
+        mp.fillRect(50, 0, 5, 20, Qt::gray);
+        mp.end();
+        const QImage masked = Filters::decontaminate(photo, Filters::layerCoverage(photo, mask), 100);
+        CHECK(masked.pixelColor(52, 10).blue() < 10 && masked.pixelColor(80, 10) == QColor(0, 0, 255));
+        // Nothing soft: unchanged.
+        CHECK(Filters::decontaminate(photo, Filters::layerCoverage(photo, QImage()), 100) == photo);
+    }
+    settings->size = 20;
+    tools->setCurrent(Tool::Brush);
+}
+
+
 // Damaged and malicious files must fail cleanly and quickly, never crash or hang.
 // (Regressions for bugs found by the fuzzer in tests/fuzz_files.cpp.)
 static void testDamagedFiles()
@@ -2186,6 +2309,7 @@ int main(int argc, char **argv) {
     testBlendingAndClipping();
     testOnCanvasText(w, tools, settings);
     testToolPack(w, tools, settings);
+    testCutout(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

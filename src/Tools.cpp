@@ -27,6 +27,9 @@ namespace {
 
 QPoint pixelAt(const QPointF &p) { return QPoint(qFloor(p.x()), qFloor(p.y())); }
 
+// A pixel as stored (premultiplied for layers), without QImage::pixel's conversion.
+QRgb rawPixel(const QImage &img, const QPoint &p) { return reinterpret_cast<const QRgb *>(img.constScanLine(p.y()))[p.x()]; }
+
 SelectionOp selectionOp(Qt::KeyboardModifiers m)
 {
     const bool shift = m & Qt::ShiftModifier;
@@ -160,13 +163,14 @@ private:
 
 class BrushTool : public Tool {
 public:
-    enum Mode { Paint, Erase, Clone, Heal, SpotHeal, SmudgeMode, BlurMode, SharpenMode, DodgeMode, BurnMode, SpongeMode };
+    enum Mode { Paint, Erase, BgErase, Clone, Heal, SpotHeal, SmudgeMode, BlurMode, SharpenMode, DodgeMode, BurnMode, SpongeMode };
     BrushTool(ToolSettings *s, Mode mode) : Tool(s), m_mode(mode) {}
 
     Id id() const override
     {
         switch (m_mode) {
         case Erase: return Eraser;
+        case BgErase: return BackgroundEraser;
         case Clone: return CloneStamp;
         case Heal: return Healing;
         case SmudgeMode: return Smudge;
@@ -197,6 +201,10 @@ public:
             showTip(QObject::tr("Alt-click or Ctrl-click to set the source point first."));
             return;
         }
+        if (m_mode == BgErase && m_doc->editingMask()) {
+            showTip(QObject::tr("The Background Eraser works on the layer's pixels. Press Ctrl+\\ to edit them."));
+            return;
+        }
 
         m_doc->prepareForPixelEdit();
         m_active = true;
@@ -211,6 +219,8 @@ public:
         }
         m_strokeRect = QRect();
         m_residual = 0;
+        if (m_mode == BgErase)  // "Once": the color clicked is the one erased for the whole stroke
+            m_eraseColor = m_doc->rect().contains(pixelAt(e.pos)) ? rawPixel(m_base, pixelAt(e.pos)) : 0;
         if (sampling) {
             if (!m_offsetSet) {  // "aligned": the offset is kept for later strokes
                 m_offset = m_sourcePoint - pixelAt(e.pos);
@@ -273,6 +283,15 @@ public:
             p.drawLine(a, b);
             p.setBrush(QColor(255, 120, 200));
             p.drawEllipse(b, 2.5, 2.5);
+        }
+        if (m_mode == BgErase) {  // the hot spot: its color is the one erased
+            const QPointF c = t.map(m_active ? m_last : m_hover);
+            for (const auto &[pen, w] : {std::pair{QColor(0, 0, 0, 160), 3.0}, std::pair{QColor(Qt::white), 1.0}}) {
+                p.setPen(QPen(pen, w));
+                p.drawLine(c - QPointF(5, 0), c + QPointF(5, 0));
+                p.drawLine(c - QPointF(0, 5), c + QPointF(0, 5));
+            }
+            return;
         }
         if ((m_mode != Clone && m_mode != Heal) || !m_hasSource)
             return;
@@ -408,25 +427,30 @@ private:
     {
         const qreal baseRadius = std::max<qreal>(0.5, m_settings->size / 2.0);
         const qreal spacing = std::max<qreal>(1.0, m_settings->size * 0.12);
-        if (m_mode == SmudgeMode) {
+        if (m_mode == SmudgeMode || m_mode == BgErase) {  // dabs that look at the pixels under them
             QRect changed;
-            auto smudge = [&](const QPointF &c, qreal pressure) {
+            auto dab = [&](const QPointF &c, qreal pressure) {
                 const qreal radius = m_settings->pressureSize ? std::max<qreal>(0.5, baseRadius * pressure) : baseRadius;
-                changed |= smudgeDab(c, radius, m_settings->pressureOpacity ? pressure : 1.0);
+                const qreal alpha = m_settings->pressureOpacity ? pressure : 1.0;
+                changed |= m_mode == SmudgeMode ? smudgeDab(c, radius, alpha) : backgroundEraseDab(c, radius, alpha);
             };
             if (first)
-                smudge(a, pa);
+                dab(a, pa);
             const QLineF line(a, b);
             const qreal len = line.length();
             qreal t = spacing - m_residual;
             while (t <= len) {
-                smudge(line.pointAt(t / len), pa + (pb - pa) * t / len);
+                dab(line.pointAt(t / len), pa + (pb - pa) * t / len);
                 t += spacing;
             }
             m_residual = len - (t - spacing);
             changed &= m_doc->rect();
-            if (!changed.isEmpty())
+            if (changed.isEmpty())
+                return;
+            if (m_mode == SmudgeMode)
                 m_doc->notifyImageChanged(changed);
+            else
+                composite(changed);
             return;
         }
         QPainter p(&m_buffer);
@@ -503,6 +527,101 @@ private:
         p.drawEllipse(c, radius, radius);
     }
 
+    // A round dab at `c` (Format_Alpha8 covering `area`), soft as far as the hardness says.
+    QImage dabCoverage(const QRect &area, const QPointF &c, qreal radius) const
+    {
+        QImage coverage(area.size(), QImage::Format_Alpha8);
+        coverage.fill(0);
+        QPainter q(&coverage);
+        q.setRenderHint(QPainter::Antialiasing);
+        q.setPen(Qt::NoPen);
+        const QPointF local = c - QPointF(area.topLeft());
+        const qreal hard = m_settings->hardness / 100.0;
+        if (hard >= 0.999) {
+            q.setBrush(Qt::black);
+        } else {
+            QRadialGradient g(local, radius);
+            g.setColorAt(0, Qt::black);
+            g.setColorAt(hard, Qt::black);
+            g.setColorAt(1, Qt::transparent);
+            q.setBrush(g);
+        }
+        q.drawEllipse(local, radius, radius);
+        return coverage;
+    }
+
+    // Background Eraser: erases the pixels under the dab that match the color to erase (the one
+    // under the brush center, or the one clicked first), fully within the tolerance and fading
+    // out a little beyond it, so soft edges keep part of their pixels. m_buffer's alpha keeps the
+    // most each pixel was erased; colors are always judged on the layer as it was before the stroke.
+    QRect backgroundEraseDab(const QPointF &c, qreal radius, qreal alpha)
+    {
+        const QPoint center = pixelAt(c);
+        const QRect area = QRectF(c.x() - radius - 1, c.y() - radius - 1, 2 * radius + 2, 2 * radius + 2).toAlignedRect()
+                           & m_doc->rect();
+        if (area.isEmpty() || !m_doc->rect().contains(center))
+            return {};
+        if (!m_settings->sampleOnce)
+            m_eraseColor = rawPixel(m_base, center);
+        const int tol = m_settings->tolerance;
+        const int soft = std::max(1, tol / 2);
+        const QRgb protect = qPremultiply(m_settings->foreground().rgba());
+        auto distance = [](QRgb a, QRgb b) {
+            return std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)),
+                             std::abs(qBlue(a) - qBlue(b)), std::abs(qAlpha(a) - qAlpha(b))});
+        };
+        // How much each pixel matches the color to erase, 0..255.
+        const int w = area.width(), h = area.height();
+        std::vector<uchar> match(size_t(w) * h);
+        for (int y = 0; y < h; ++y) {
+            const QRgb *row = reinterpret_cast<const QRgb *>(m_base.constScanLine(area.top() + y)) + area.left();
+            for (int x = 0; x < w; ++x) {
+                const int d = distance(row[x], m_eraseColor);
+                int k = d <= tol ? 255 : std::max(0, 255 * (tol + soft - d) / soft);
+                if (k && m_settings->protectForeground && distance(row[x], protect) <= tol)
+                    k = 0;
+                match[size_t(y) * w + x] = uchar(k);
+            }
+        }
+        if (m_settings->contiguous) {
+            // Only matching pixels connected to the brush center.
+            std::vector<uchar> reached(match.size(), 0);
+            std::vector<int> stack;
+            const int start = (center.y() - area.top()) * w + (center.x() - area.left());
+            if (match[size_t(start)]) {
+                reached[size_t(start)] = 1;
+                stack.push_back(start);
+            }
+            while (!stack.empty()) {
+                const int i = stack.back();
+                stack.pop_back();
+                const int x = i % w, y = i / w;
+                for (const auto &[dx, dy] : {std::pair{-1, 0}, std::pair{1, 0}, std::pair{0, -1}, std::pair{0, 1}}) {
+                    const int nx = x + dx, ny = y + dy;
+                    const size_t n = size_t(ny) * w + nx;
+                    if (nx >= 0 && ny >= 0 && nx < w && ny < h && !reached[n] && match[n]) {
+                        reached[n] = 1;
+                        stack.push_back(int(n));
+                    }
+                }
+            }
+            for (size_t i = 0; i < match.size(); ++i)
+                if (!reached[i])
+                    match[i] = 0;
+        }
+        const QImage coverage = dabCoverage(area, c, radius);
+        for (int y = 0; y < h; ++y) {
+            const uchar *cov = coverage.constScanLine(y);
+            QRgb *buf = reinterpret_cast<QRgb *>(m_buffer.scanLine(area.top() + y)) + area.left();
+            for (int x = 0; x < w; ++x) {
+                const int e = int(cov[x] * match[size_t(y) * w + x] / 255 * alpha);
+                if (e > qAlpha(buf[x]))
+                    buf[x] = qRgba(0, 0, 0, e);
+            }
+        }
+        return area;
+    }
+
     // Smudge: blends the paint picked up so far into the canvas under the dab, then
     // picks up some of the result. Returns the changed rectangle.
     QRect smudgeDab(const QPointF &c, qreal radius, qreal alpha)
@@ -516,28 +635,11 @@ private:
             m_sample = current;
             return QRect();
         }
-        QImage coverage(size, size, QImage::Format_Alpha8);
-        coverage.fill(0);
-        {
+        QImage coverage = dabCoverage(area, c, radius);
+        if (m_doc->hasSelection()) {
             QPainter q(&coverage);
-            q.setRenderHint(QPainter::Antialiasing);
-            q.setPen(Qt::NoPen);
-            const QPointF local = c - QPointF(topLeft);
-            const qreal hard = m_settings->hardness / 100.0;
-            if (hard >= 0.999) {
-                q.setBrush(Qt::black);
-            } else {
-                QRadialGradient g(local, radius);
-                g.setColorAt(0, Qt::black);
-                g.setColorAt(hard, Qt::black);
-                g.setColorAt(1, Qt::transparent);
-                q.setBrush(g);
-            }
-            q.drawEllipse(local, radius, radius);
-            if (m_doc->hasSelection()) {
-                q.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-                q.drawImage(QPoint(0, 0), m_doc->selection(), area);
-            }
+            q.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            q.drawImage(QPoint(0, 0), m_doc->selection(), area);
         }
         const qreal strength = m_settings->opacity / 100.0 * alpha;
         QImage result = current;
@@ -604,9 +706,9 @@ private:
         QPainter p(&m_doc->targetImage());
         p.setCompositionMode(QPainter::CompositionMode_Source);
         p.drawImage(r.topLeft(), m_base, r);
-        p.setOpacity(m_settings->opacity / 100.0);
-        p.setCompositionMode(m_mode == Erase ? QPainter::CompositionMode_DestinationOut
-                                             : QPainter::CompositionMode_SourceOver);
+        p.setOpacity(m_mode == BgErase ? 1.0 : m_settings->opacity / 100.0);
+        p.setCompositionMode(m_mode == Erase || m_mode == BgErase ? QPainter::CompositionMode_DestinationOut
+                                                                  : QPainter::CompositionMode_SourceOver);
         p.drawImage(r.topLeft(), stroke);
         p.end();
         m_doc->notifyImageChanged(r);
@@ -627,6 +729,7 @@ private:
     const Document *m_lastDoc = nullptr;
     qreal m_residual = 0;
     QPoint m_sourcePoint, m_offset;
+    QRgb m_eraseColor = 0;  // Background Eraser: the (premultiplied) color being erased
     bool m_hasSource = false;
     bool m_offsetSet = false;
 };
@@ -2031,6 +2134,7 @@ std::unique_ptr<Tool> createTool(Tool::Id id, ToolSettings *s)
     case Tool::Eyedropper: return std::make_unique<EyedropperTool>(s);
     case Tool::Brush: return std::make_unique<BrushTool>(s, BrushTool::Paint);
     case Tool::Eraser: return std::make_unique<BrushTool>(s, BrushTool::Erase);
+    case Tool::BackgroundEraser: return std::make_unique<BrushTool>(s, BrushTool::BgErase);
     case Tool::CloneStamp: return std::make_unique<BrushTool>(s, BrushTool::Clone);
     case Tool::Healing: return std::make_unique<BrushTool>(s, BrushTool::Heal);
     case Tool::SpotHealing: return std::make_unique<BrushTool>(s, BrushTool::SpotHeal);
@@ -2070,6 +2174,7 @@ QString Tool::name(Id id)
     case Eyedropper: return QObject::tr("Eyedropper");
     case Brush: return QObject::tr("Brush");
     case Eraser: return QObject::tr("Eraser");
+    case BackgroundEraser: return QObject::tr("Background Eraser");
     case CloneStamp: return QObject::tr("Clone Stamp");
     case SpotHealing: return QObject::tr("Spot Healing Brush");
     case Healing: return QObject::tr("Healing Brush");
@@ -2094,7 +2199,7 @@ QString Tool::name(Id id)
 
 QString Tool::shortcut(Id id)
 {
-    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "E", "S",
+    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "E", "Shift+E", "S",
                                       "J", "Shift+J", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
                                       "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
@@ -2118,6 +2223,8 @@ QString Tool::hint(Id id)
     case Eyedropper: return QObject::tr("Click: foreground color · Right-click or Alt-click: background color");
     case Brush:
     case Eraser: return QObject::tr("Shift-click draws a straight line from the last stroke · [ ] change size");
+    case BackgroundEraser: return QObject::tr("Drag along an object's edge, with the + over the background: "
+                                              "that color is erased, the object stays");
     case CloneStamp: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint to copy it");
     case Healing: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint over blemishes");
     case Smudge: return QObject::tr("Drag to smear colors, like a finger through wet paint");
@@ -2139,7 +2246,7 @@ QString Tool::hint(Id id)
 bool Tool::editsPixels(Id id)
 {
     switch (id) {
-    case Transform: case Brush: case Eraser: case CloneStamp: case SpotHealing: case Healing: case Smudge:
+    case Transform: case Brush: case Eraser: case BackgroundEraser: case CloneStamp: case SpotHealing: case Healing: case Smudge:
     case Blur: case Sharpen: case Dodge: case Burn: case Sponge:
     case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
         return true;

@@ -928,4 +928,121 @@ QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool cont
     return mask;
 }
 
+
+QImage layerCoverage(const QImage &image, const QImage &mask)
+{
+    const QImage img = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const bool masked = !mask.isNull() && mask.size() == img.size();
+    const QImage m = masked ? mask.convertToFormat(QImage::Format_ARGB32_Premultiplied) : QImage();
+    QImage out(img.size(), QImage::Format_Alpha8);
+    uchar *outBits = out.bits();
+    const qsizetype outBpl = out.bytesPerLine();
+    parallelFor(img.height(), [&](int y) {
+        const QRgb *in = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        const QRgb *mk = masked ? reinterpret_cast<const QRgb *>(m.constScanLine(y)) : nullptr;
+        uchar *o = outBits + y * outBpl;
+        for (int x = 0; x < img.width(); ++x) {
+            int a = qAlpha(in[x]);
+            if (mk)  // masks are premultiplied, so transparent counts as black
+                a = a * ((qRed(mk[x]) * 77 + qGreen(mk[x]) * 150 + qBlue(mk[x]) * 29) >> 8) / 255;
+            o[x] = uchar(a);
+        }
+    });
+    return out;
+}
+
+QImage decontaminate(const QImage &src, const QImage &coverage, int amount)
+{
+    QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    const int w = img.width(), h = img.height();
+    if (amount <= 0 || coverage.size() != img.size() || w == 0 || h == 0)
+        return src;
+    constexpr int kSolid = 250;  // coverage from which a pixel counts as the object itself
+    constexpr int kReach = 64;   // how far (px) object colors spread out from the solid part
+    constexpr quint8 kUnseen = 255;
+
+    // Breadth first from the solid pixels outwards: each ring takes the average color of its
+    // neighbors in the rings before it, so the object's own colors spread into its soft edge.
+    std::vector<quint8> dist(size_t(w) * h, kUnseen);
+    QImage pure = img;  // the object's colors, spread outwards
+    std::vector<int> ring;
+    for (int y = 0; y < h; ++y) {
+        const uchar *cov = coverage.constScanLine(y);
+        for (int x = 0; x < w; ++x)
+            if (cov[x] >= kSolid)
+                dist[size_t(y) * w + x] = 0;
+    }
+    bool anySoft = false;
+    for (int y = 0; y < h; ++y) {
+        const uchar *cov = coverage.constScanLine(y);
+        for (int x = 0; x < w; ++x) {
+            if (cov[x] >= kSolid)
+                continue;
+            anySoft |= cov[x] > 0;
+            // Solid pixels next to this one start the spreading.
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && ny >= 0 && nx < w && ny < h && dist[size_t(ny) * w + nx] == 0) {
+                        dist[size_t(ny) * w + nx] = 1;  // marked once; reset to 0 below
+                        ring.push_back(ny * w + nx);
+                    }
+                }
+        }
+    }
+    if (!anySoft)
+        return src;
+    for (int i : ring)
+        dist[size_t(i)] = 0;
+
+    std::vector<int> next;
+    for (int d = 1; d <= kReach && !ring.empty(); ++d) {
+        next.clear();
+        for (int i : ring) {
+            const int x = i % w, y = i / w;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h || dist[size_t(ny) * w + nx] != kUnseen)
+                        continue;
+                    dist[size_t(ny) * w + nx] = quint8(d);
+                    next.push_back(ny * w + nx);
+                }
+        }
+        for (int i : next) {
+            const int x = i % w, y = i / w;
+            int r = 0, g = 0, b = 0, n = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h || dist[size_t(ny) * w + nx] >= d)
+                        continue;
+                    const QRgb c = reinterpret_cast<const QRgb *>(pure.constScanLine(ny))[nx];
+                    r += qRed(c);
+                    g += qGreen(c);
+                    b += qBlue(c);
+                    ++n;
+                }
+            reinterpret_cast<QRgb *>(pure.scanLine(y))[x] = qRgb(r / n, g / n, b / n);
+        }
+        ring.swap(next);
+    }
+
+    // Soft edge pixels take the spread colors; their transparency stays as it is.
+    parallelFor(h, [&](int y) {
+        const uchar *cov = coverage.constScanLine(y);
+        const QRgb *p = reinterpret_cast<const QRgb *>(pure.constScanLine(y));
+        QRgb *o = reinterpret_cast<QRgb *>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const quint8 d = dist[size_t(y) * w + x];
+            if (cov[x] == 0 || cov[x] >= kSolid || d == 0 || d == kUnseen)
+                continue;
+            auto mix = [amount](int u, int v) { return u + (v - u) * amount / 100; };
+            o[x] = qRgba(mix(qRed(o[x]), qRed(p[x])), mix(qGreen(o[x]), qGreen(p[x])), mix(qBlue(o[x]), qBlue(p[x])),
+                         qAlpha(o[x]));
+        }
+    });
+    return img.convertToFormat(src.format());
+}
+
 } // namespace Filters
