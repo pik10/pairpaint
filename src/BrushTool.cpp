@@ -3,6 +3,7 @@
 
 #include "BrushTool.h"
 
+#include "Blending.h"
 #include "Canvas.h"
 #include "Document.h"
 #include "Filters.h"
@@ -157,19 +158,17 @@ public:
     }
 };
 
-// Erases the pixels under the dab that match the color to erase (the one under the brush center,
-// or the one clicked first), fully within the tolerance and fading out a little beyond it, so soft
-// edges keep part of their pixels. The buffer's alpha keeps the most each pixel was erased; colors
-// are always judged on the layer as it was before the stroke.
-class BackgroundEraseEffect : public BrushEffect {
+// Brushes that change only the pixels matching a sampled color (the one under the brush center, or
+// the one clicked first): fully within the tolerance, fading out a little beyond it, so soft edges
+// are partly changed. The buffer's alpha keeps the most each pixel was matched; colors are always
+// judged on the layer as it was before the stroke.
+class ColorMatchEffect : public BrushEffect {
 public:
-    Tool::Id id() const override { return Tool::BackgroundEraser; }
-
     bool press(Stroke &s, const ToolEvent &, Canvas *) override
     {
         if (!s.doc->editingMask())
             return true;
-        showTip(QObject::tr("The Background Eraser works on the layer's pixels. Press Ctrl+\\ to edit them."));
+        showTip(QObject::tr("The %1 works on the layer's pixels. Press Ctrl+\\ to edit them.").arg(Tool::name(id())));
         return false;
     }
 
@@ -205,7 +204,7 @@ public:
             for (int x = 0; x < w; ++x) {
                 const int dist = distance(row[x], m_color);
                 int k = dist <= tol ? 255 : std::max(0, 255 * (tol + soft - dist) / soft);
-                if (k && st->protectForeground && distance(row[x], protect) <= tol)
+                if (k && protectsForeground(s) && distance(row[x], protect) <= tol)
                     k = 0;
                 match[size_t(y) * w + x] = uchar(k);
             }
@@ -249,14 +248,9 @@ public:
         return area;
     }
 
-    void show(Stroke &s, const QRect &r) override
-    {
-        apply(s, r, strokeIn(s, r), 1.0, QPainter::CompositionMode_DestinationOut);
-    }
-
     void paintOverlay(QPainter &p, const QTransform &t, const Stroke &, const QPointF &brush) override
     {
-        // The hot spot: its color is the one erased.
+        // The hot spot: its color is the one changed.
         const QPointF c = t.map(brush);
         for (const auto &[pen, w] : {std::pair{QColor(0, 0, 0, 160), 3.0}, std::pair{QColor(Qt::white), 1.0}}) {
             p.setPen(QPen(pen, w));
@@ -265,8 +259,48 @@ public:
         }
     }
 
+protected:
+    virtual bool protectsForeground(const Stroke &) const { return false; }
+
 private:
-    QRgb m_color = 0;  // the (premultiplied) color being erased
+    QRgb m_color = 0;  // the (premultiplied) color being matched
+};
+
+// Background Eraser: erases the matching pixels.
+class BackgroundEraseEffect : public ColorMatchEffect {
+public:
+    Tool::Id id() const override { return Tool::BackgroundEraser; }
+    void show(Stroke &s, const QRect &r) override
+    {
+        apply(s, r, strokeIn(s, r), 1.0, QPainter::CompositionMode_DestinationOut);
+    }
+
+protected:
+    bool protectsForeground(const Stroke &s) const override { return s.settings->protectForeground; }
+};
+
+// Color Replacement: gives the matching pixels the foreground color's hue and saturation (or one
+// of them, or its luminosity), keeping their own shading.
+class ColorReplaceEffect : public ColorMatchEffect {
+public:
+    Tool::Id id() const override { return Tool::ColorReplacement; }
+    void show(Stroke &s, const QRect &r) override
+    {
+        static constexpr QPainter::CompositionMode modes[] = {Blend::Color, Blend::Hue, Blend::Saturation, Blend::Luminosity};
+        const QImage before = s.base.copy(r);
+        QImage recolored = before;
+        QImage paint(r.size(), QImage::Format_ARGB32_Premultiplied);
+        paint.fill(s.settings->foreground().rgb());  // opaque: only its color counts
+        Blend::draw(recolored, paint, modes[std::clamp(s.settings->replaceMode, 0, 3)], 1.0, r.topLeft());
+        Blend::restoreAlpha(recolored, before);
+        QImage out = before;
+        Blend::mixByAlpha(out, recolored, strokeIn(s, r));
+        QPainter p(&s.doc->targetImage());
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        p.drawImage(r.topLeft(), out);
+        p.end();
+        s.doc->notifyImageChanged(r);
+    }
 };
 
 // Blur, Sharpen, Dodge, Burn and Sponge: the layer with an adjustment applied, revealed where
@@ -737,6 +771,7 @@ std::unique_ptr<Tool> createBrushTool(Tool::Id id, ToolSettings *settings)
     std::unique_ptr<BrushEffect> effect;
     switch (id) {
     case Tool::Brush: effect = std::make_unique<PaintEffect>(); break;
+    case Tool::ColorReplacement: effect = std::make_unique<ColorReplaceEffect>(); break;
     case Tool::Eraser: effect = std::make_unique<EraseEffect>(); break;
     case Tool::BackgroundEraser: effect = std::make_unique<BackgroundEraseEffect>(); break;
     case Tool::CloneStamp: effect = std::make_unique<CloneEffect>(false); break;

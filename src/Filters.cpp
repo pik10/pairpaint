@@ -8,6 +8,7 @@
 #include <QRandomGenerator>
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numeric>
 #include <vector>
@@ -1043,6 +1044,212 @@ QImage decontaminate(const QImage &src, const QImage &coverage, int amount)
         }
     });
     return img.convertToFormat(src.format());
+}
+
+QImage reduceNoise(const QImage &src, int strength, int color)
+{
+    const QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    const int w = img.width(), h = img.height();
+    if (img.isNull() || (strength <= 0 && color <= 0))
+        return src;
+    // Brightness (Y) and color (Cb, Cr) are smoothed separately: grain in Y is smoothed only among
+    // similar neighbors, which keeps edges; color noise can be blurred much further unnoticed.
+    std::vector<float> Y(size_t(w) * h);
+    QImage chroma(w, h, QImage::Format_ARGB32);  // Cb + 128 in red, Cr + 128 in green
+    uchar *chromaBits = chroma.bits();
+    const qsizetype chromaBpl = chroma.bytesPerLine();
+    parallelFor(h, [&](int y) {
+        const QRgb *in = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        QRgb *c = reinterpret_cast<QRgb *>(chromaBits + y * chromaBpl);
+        for (int x = 0; x < w; ++x) {
+            const float r = qRed(in[x]), g = qGreen(in[x]), b = qBlue(in[x]);
+            const float l = 0.299f * r + 0.587f * g + 0.114f * b;
+            Y[size_t(y) * w + x] = l;
+            c[x] = qRgb(clamp255(qRound(0.564f * (b - l)) + 128), clamp255(qRound(0.713f * (r - l)) + 128), 0);
+        }
+    });
+    if (color > 0)
+        chroma = gaussianBlur(chroma, color / 100.0 * 4.0).convertToFormat(QImage::Format_ARGB32);
+
+    std::vector<float> outY = Y;
+    if (strength > 0) {
+        // Bilateral filter: a weighted average of the neighbors, weighted less the farther they
+        // are and much less the more their brightness differs.
+        const int r = 1 + strength / 34;
+        const float sigmaS = r * 0.6f + 0.4f, sigmaR = 4.0f + strength * 0.36f;
+        std::vector<float> spatial(size_t(2 * r + 1) * (2 * r + 1));
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx)
+                spatial[size_t(dy + r) * (2 * r + 1) + dx + r] = std::exp(-(dx * dx + dy * dy) / (2 * sigmaS * sigmaS));
+        std::array<float, 256> range;
+        for (int d = 0; d < 256; ++d)
+            range[d] = std::exp(-(d * d) / (2 * sigmaR * sigmaR));
+        parallelFor(h, [&](int y) {
+            for (int x = 0; x < w; ++x) {
+                const float c = Y[size_t(y) * w + x];
+                float sum = 0, weight = 0;
+                for (int dy = -r; dy <= r; ++dy) {
+                    const int ny = std::clamp(y + dy, 0, h - 1);
+                    const float *row = &Y[size_t(ny) * w];
+                    const float *sp = &spatial[size_t(dy + r) * (2 * r + 1) + r];
+                    for (int dx = -r; dx <= r; ++dx) {
+                        const float v = row[std::clamp(x + dx, 0, w - 1)];
+                        const float k = sp[dx] * range[std::min(255, int(std::abs(v - c)))];
+                        sum += v * k;
+                        weight += k;
+                    }
+                }
+                outY[size_t(y) * w + x] = sum / weight;
+            }
+        });
+    }
+
+    QImage out(w, h, QImage::Format_ARGB32);
+    uchar *outBits = out.bits();
+    const qsizetype outBpl = out.bytesPerLine();
+    parallelFor(h, [&](int y) {
+        const QRgb *in = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        const QRgb *c = reinterpret_cast<const QRgb *>(chroma.constScanLine(y));
+        QRgb *o = reinterpret_cast<QRgb *>(outBits + y * outBpl);
+        for (int x = 0; x < w; ++x) {
+            const float l = outY[size_t(y) * w + x];
+            const float cb = (qRed(c[x]) - 128) / 0.564f, cr = (qGreen(c[x]) - 128) / 0.713f;
+            // cb = b - l, cr = r - l, and l = 0.299 r + 0.587 g + 0.114 b gives g.
+            const float r = l + cr, b = l + cb, g = (l - 0.299f * r - 0.114f * b) / 0.587f;
+            o[x] = qRgba(clamp255(qRound(r)), clamp255(qRound(g)), clamp255(qRound(b)), qAlpha(in[x]));
+        }
+    });
+    return out.convertToFormat(src.format());
+}
+
+QImage shadowsHighlights(const QImage &src, int shadows, int highlights, int radius)
+{
+    const QImage img = src.convertToFormat(QImage::Format_ARGB32);
+    const int w = img.width(), h = img.height();
+    if (img.isNull() || (shadows <= 0 && highlights <= 0))
+        return src;
+    auto luma = [](QRgb p) { return (0.299f * qRed(p) + 0.587f * qGreen(p) + 0.114f * qBlue(p)) / 255.0f; };
+    // How bright each pixel's surroundings are.
+    QImage around(w, h, QImage::Format_ARGB32);
+    for (int y = 0; y < h; ++y) {
+        const QRgb *in = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        QRgb *o = reinterpret_cast<QRgb *>(around.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const int l = qRound(luma(in[x]) * 255);
+            o[x] = qRgb(l, l, l);
+        }
+    }
+    around = gaussianBlur(around, std::max(1, radius)).convertToFormat(QImage::Format_ARGB32);
+    auto smoothstep = [](float a, float b, float v) {
+        const float t = std::clamp((v - a) / (b - a), 0.0f, 1.0f);
+        return t * t * (3 - 2 * t);
+    };
+    QImage out = img;
+    uchar *outBits = out.bits();
+    const qsizetype outBpl = out.bytesPerLine();
+    parallelFor(h, [&](int y) {
+        const QRgb *m = reinterpret_cast<const QRgb *>(around.constScanLine(y));
+        QRgb *o = reinterpret_cast<QRgb *>(outBits + y * outBpl);
+        for (int x = 0; x < w; ++x) {
+            const float l = luma(o[x]);
+            const float local = qRed(m[x]) / 255.0f;
+            // Dark surroundings lift (a gamma curve, so black stays black), bright ones come down.
+            const float ws = 1.0f - smoothstep(0.0f, 0.6f, local), wh = smoothstep(0.4f, 1.0f, local);
+            float t = std::pow(l, 1.0f / (1.0f + 2.5f * shadows / 100.0f * ws));
+            t = 1.0f - std::pow(1.0f - t, 1.0f / (1.0f + 2.5f * highlights / 100.0f * wh));
+            if (std::abs(t - l) < 1e-4f)
+                continue;
+            // Scale the color to keep its saturation; what scaling can't reach (near black) is added.
+            const float ratio = l > 0.002f ? std::min(t / l, 4.0f) : 1.0f;
+            const float add = (t - l * ratio) * 255.0f;
+            const QRgb p = o[x];
+            o[x] = qRgba(clamp255(qRound(qRed(p) * ratio + add)), clamp255(qRound(qGreen(p) * ratio + add)),
+                         clamp255(qRound(qBlue(p) * ratio + add)), qAlpha(p));
+        }
+    });
+    return out.convertToFormat(src.format());
+}
+
+QImage redEye(const QImage &region, int pupil, int darken)
+{
+    QImage img = region.convertToFormat(QImage::Format_ARGB32);
+    const int w = img.width(), h = img.height();
+    if (img.isNull())
+        return {};
+    // Redness: how much red stands out from green and blue. Pupils in flash photos are strongly red;
+    // skin and lips are much less so.
+    std::vector<int> red(size_t(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const QRgb *p = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+        for (int x = 0; x < w; ++x)
+            red[size_t(y) * w + x] = qAlpha(p[x]) < 128 || qRed(p[x]) < 60
+                                         ? 0 : qRed(p[x]) - std::max(qGreen(p[x]), qBlue(p[x]));
+    }
+    const int threshold = 110 - std::clamp(pupil, 1, 100) * 3 / 4;  // 35 (big pupil) .. 109
+    // The seed: the reddest pixel, favoring ones near the center (where the user clicked).
+    const QPointF center((w - 1) / 2.0, (h - 1) / 2.0);
+    const double maxDist = std::max(1.0, std::hypot(center.x(), center.y()));
+    int seed = -1;
+    double best = 0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const int r = red[size_t(y) * w + x];
+            if (r < threshold)
+                continue;
+            const double score = r * (1.0 - 0.6 * std::hypot(x - center.x(), y - center.y()) / maxDist);
+            if (score > best) {
+                best = score;
+                seed = y * w + x;
+            }
+        }
+    if (seed < 0)
+        return {};
+    // The pupil: red pixels connected to the seed.
+    std::vector<uchar> in(red.size(), 0);
+    std::vector<int> stack{seed};
+    in[size_t(seed)] = 1;
+    while (!stack.empty()) {
+        const int i = stack.back();
+        stack.pop_back();
+        const int x = i % w, y = i / w;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int nx = x + dx, ny = y + dy;
+                const size_t n = size_t(ny) * w + nx;
+                if (nx >= 0 && ny >= 0 && nx < w && ny < h && !in[n] && red[n] >= threshold) {
+                    in[n] = 1;
+                    stack.push_back(int(n));
+                }
+            }
+    }
+    // Its soft rim: pixels next to the pupil that are somewhat red get a partial fix.
+    const float keep = 1.0f - std::clamp(darken, 0, 100) / 100.0f * 0.75f;
+    for (int y = 0; y < h; ++y) {
+        QRgb *p = reinterpret_cast<QRgb *>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            float k = 0;
+            if (in[size_t(y) * w + x]) {
+                k = 1;
+            } else {
+                bool near = false;
+                for (int dy = -2; dy <= 2 && !near; ++dy)
+                    for (int dx = -2; dx <= 2 && !near; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        near = nx >= 0 && ny >= 0 && nx < w && ny < h && in[size_t(ny) * w + nx];
+                    }
+                if (near)
+                    k = std::clamp(red[size_t(y) * w + x] / float(threshold), 0.0f, 1.0f);
+            }
+            if (k == 0)
+                continue;
+            // No more red than green and blue, then darker.
+            const QRgb c = p[x];
+            const float g = qGreen(c), b = qBlue(c), r = std::min<float>(qRed(c), (g + b) / 2);
+            auto mix = [k](float u, float v) { return clamp255(qRound(u + (v - u) * k)); };
+            p[x] = qRgba(mix(qRed(c), r * keep), mix(g, g * keep), mix(b, b * keep), qAlpha(c));
+        }
+    }
+    return img.convertToFormat(region.format());
 }
 
 } // namespace Filters

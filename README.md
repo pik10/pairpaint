@@ -47,8 +47,8 @@ You can also [build from source](#building).
   (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
   editable when moved, and become pixels only when painted on
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Polygonal
-  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Eraser, Background Eraser, Clone Stamp, Spot Healing
-  Brush, Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
+  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Color Replacement, Eraser, Background Eraser, Clone Stamp, Spot Healing
+  Brush, Healing Brush, Red Eye, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)
 - **Brush smoothing**: steadies shaky strokes (all brush tools), like a string the brush follows
@@ -58,9 +58,9 @@ You can also [build from source](#building).
 - **Selections**: pixel masks with anti-aliasing, add / subtract / intersect, invert, marching ants;
   Feather, Expand, Contract, Border, Smooth, Color Range and Load Layer Transparency;
   every paint tool and filter respects the selection; Move and Free Transform act on selected pixels
-- **Adjustments**: all of the above, plus one-click **Auto Tone**, **Auto Contrast** and **Auto Color**
+- **Adjustments**: all of the above, plus Shadows/Highlights, one-click **Auto Tone**, **Auto Contrast** and **Auto Color**
   (removes color casts), and Desaturate
-- **Filters**: Gaussian Blur, Unsharp Mask, Add Noise, Pixelate, all with live preview, multi-threaded
+- **Filters**: Gaussian Blur, Unsharp Mask, Reduce Noise, Add Noise, Pixelate, all with live preview, multi-threaded
 - **Image**: Image Size, Canvas Size (with anchor), Crop, Rotate, Flip
 - **Undo** (80 steps) with a History panel, multiple documents in tabs
 - **Autosave and crash recovery**: every 2 minutes, images with unsaved changes are copied in the

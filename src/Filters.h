@@ -36,6 +36,17 @@ QImage posterize(const QImage &src, int levels);
 QImage gaussianBlur(const QImage &src, double radius);
 QImage unsharpMask(const QImage &src, int amountPercent, double radius, int threshold);
 QImage addNoise(const QImage &src, int amountPercent);
+// Reduce Noise: smooths grain while keeping edges (strength 0..100), and blurs color noise
+// (blotches of color in dark or low-light photos) without blurring the image (color 0..100).
+QImage reduceNoise(const QImage &src, int strength, int color);
+// Shadows/Highlights: lightens dark areas (shadows 0..100) and darkens bright areas
+// (highlights 0..100), judged by the brightness around each pixel within `radius` px, so a
+// backlit subject gets lighter without washing out the sky.
+QImage shadowsHighlights(const QImage &src, int shadows, int highlights, int radius);
+// Red eye: finds the red pupil in `region` (the one nearest its center) and makes it a natural
+// dark gray. `pupil` (1..100) is how far into orange-red pixels it reaches, `darken` (0..100) how
+// dark it gets. Null when there is no red pupil.
+QImage redEye(const QImage &region, int pupil, int darken);
 QImage pixelate(const QImage &src, int cellSize);
 // Lightens (dodge) or darkens (burn) the shadows, midtones or highlights (range 0..2).
 QImage dodgeBurn(const QImage &src, bool burn, int range);

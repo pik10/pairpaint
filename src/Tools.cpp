@@ -522,6 +522,93 @@ public:
     }
 };
 
+// Red Eye: click on a red pupil (it is looked for around the click), or drag a box around the eye.
+class RedEyeTool : public Tool {
+public:
+    using Tool::Tool;
+    Id id() const override { return RedEye; }
+
+    void press(const ToolEvent &e) override
+    {
+        if (e.button != Qt::LeftButton)
+            return;
+        m_start = m_end = e.pos;
+        m_dragging = true;
+    }
+
+    void move(const ToolEvent &e) override
+    {
+        if (!m_dragging)
+            return;
+        m_end = e.pos;
+        m_canvas->update();
+    }
+
+    void release(const ToolEvent &e) override
+    {
+        if (e.button != Qt::LeftButton || !m_dragging)
+            return;
+        m_end = e.pos;
+        m_dragging = false;
+        m_canvas->update();
+        fix();
+    }
+
+    void cancel() override
+    {
+        if (m_dragging && m_canvas)
+            m_canvas->update();
+        m_dragging = false;
+    }
+
+    void paintOverlay(QPainter &p, const QTransform &t) override
+    {
+        if (!m_dragging || !isBox())
+            return;
+        QPainterPath box;
+        box.addRect(QRectF(m_start, m_end).normalized());
+        drawOutline(p, t.map(box));
+    }
+
+private:
+    bool isBox() const { return std::abs(m_end.x() - m_start.x()) >= 4 || std::abs(m_end.y() - m_start.y()) >= 4; }
+
+    void fix()
+    {
+        if (m_doc->editingMask()) {
+            showTip(QObject::tr("The Red Eye tool works on the layer's pixels. Press Ctrl+\\ to edit them."));
+            return;
+        }
+        QRect area;
+        if (isBox()) {
+            area = QRectF(m_start, m_end).normalized().toAlignedRect();
+        } else {
+            // A click: look around it, as far as an eye in a typical photo of a face.
+            const int r = std::max(12, std::min(m_doc->size().width(), m_doc->size().height()) / 25);
+            area = QRect(pixelAt(m_start) - QPoint(r, r), QSize(2 * r + 1, 2 * r + 1));
+        }
+        area &= m_doc->rect();
+        if (area.isEmpty())
+            return;
+        m_doc->prepareForPixelEdit();
+        const QImage fixed = Filters::redEye(m_doc->targetImage().copy(area), m_settings->pupilSize, m_settings->darkenAmount);
+        if (fixed.isNull()) {
+            showTip(QObject::tr("No red eye found here. Click on the red pupil, or drag a box around the eye."));
+            return;
+        }
+        m_doc->applyToActive(name(RedEye), [&](const QImage &img) {
+            QImage out = img;
+            QPainter p(&out);
+            p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.drawImage(area.topLeft(), fixed);
+            return out;
+        });
+    }
+
+    QPointF m_start, m_end;
+    bool m_dragging = false;
+};
+
 class EyedropperTool : public Tool {
 public:
     using Tool::Tool;
@@ -1542,6 +1629,7 @@ std::unique_ptr<Tool> createTool(Tool::Id id, ToolSettings *s)
     case Tool::MagicWand: return std::make_unique<MagicWandTool>(s);
     case Tool::Crop: return std::make_unique<CropTool>(s);
     case Tool::Eyedropper: return std::make_unique<EyedropperTool>(s);
+    case Tool::RedEye: return std::make_unique<RedEyeTool>(s);
     case Tool::PolyLasso: return std::make_unique<PolygonLassoTool>(s);
     case Tool::Fill: return std::make_unique<FillTool>(s);
     case Tool::Gradient: return std::make_unique<GradientTool>(s);
@@ -1570,11 +1658,13 @@ QString Tool::name(Id id)
     case Crop: return QObject::tr("Crop");
     case Eyedropper: return QObject::tr("Eyedropper");
     case Brush: return QObject::tr("Brush");
+    case ColorReplacement: return QObject::tr("Color Replacement");
     case Eraser: return QObject::tr("Eraser");
     case BackgroundEraser: return QObject::tr("Background Eraser");
     case CloneStamp: return QObject::tr("Clone Stamp");
     case SpotHealing: return QObject::tr("Spot Healing Brush");
     case Healing: return QObject::tr("Healing Brush");
+    case RedEye: return QObject::tr("Red Eye");
     case Smudge: return QObject::tr("Smudge");
     case Blur: return QObject::tr("Blur");
     case Sharpen: return QObject::tr("Sharpen");
@@ -1596,8 +1686,8 @@ QString Tool::name(Id id)
 
 QString Tool::shortcut(Id id)
 {
-    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "E", "Shift+E", "S",
-                                      "J", "Shift+J", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
+    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "Shift+B", "E", "Shift+E", "S",
+                                      "J", "Shift+J", "", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
                                       "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
 }
@@ -1624,6 +1714,9 @@ QString Tool::hint(Id id)
                                               "that color is erased, the object stays");
     case CloneStamp: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint to copy it");
     case Healing: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint over blemishes");
+    case ColorReplacement: return QObject::tr("Paint over an object with the + on it: its color becomes the foreground "
+                                              "color, keeping its shading");
+    case RedEye: return QObject::tr("Click on a red pupil, or drag a box around the eye");
     case Smudge: return QObject::tr("Drag to smear colors, like a finger through wet paint");
     case Dodge: return QObject::tr("Paint to lighten the chosen tonal range");
     case Burn: return QObject::tr("Paint to darken the chosen tonal range");
@@ -1643,7 +1736,8 @@ QString Tool::hint(Id id)
 bool Tool::editsPixels(Id id)
 {
     switch (id) {
-    case Transform: case Brush: case Eraser: case BackgroundEraser: case CloneStamp: case SpotHealing: case Healing: case Smudge:
+    case Transform: case Brush: case ColorReplacement: case Eraser: case BackgroundEraser: case CloneStamp:
+    case SpotHealing: case Healing: case RedEye: case Smudge:
     case Blur: case Sharpen: case Dodge: case Burn: case Sponge:
     case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
         return true;

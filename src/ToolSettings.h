@@ -29,6 +29,9 @@ public:
     bool spongeSaturate = false;   // Sponge: add saturation (true) or remove it
     bool sampleOnce = false;       // Background Eraser: erase the color clicked first, not the one under the brush
     bool protectForeground = false;  // Background Eraser: never erase the foreground color
+    int replaceMode = 0;           // Color Replacement: 0 color, 1 hue, 2 saturation, 3 luminosity
+    int pupilSize = 50;            // Red Eye: 1..100, how far into orange-red pixels it reaches
+    int darkenAmount = 50;         // Red Eye: 0..100
     double cropRatio = 0;          // Crop: width / height, 0 = free, -1 = the image's own ratio
     bool pressureSize = true;      // pen pressure controls brush size
     bool pressureOpacity = false;  // pen pressure controls brush opacity

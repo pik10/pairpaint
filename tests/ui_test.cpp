@@ -1069,6 +1069,148 @@ static void testCutout(MainWindow &w, ToolManager *tools, ToolSettings *settings
 }
 
 
+// Everyday photo fixes: Shadows/Highlights, Reduce Noise, Red Eye and Color Replacement.
+static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    auto newDoc = [&](const QImage &img) {
+        w.addDocument(new Document(img));
+        auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+        c->fitToWindow();
+        return c;
+    };
+    auto luma = [](const QColor &c) { return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue(); };
+
+    // --- Shadows/Highlights: a dark subject (left) against a bright sky (right).
+    {
+        QImage img(200, 100, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(230, 235, 245));
+        QPainter p(&img);
+        p.fillRect(0, 0, 100, 100, QColor(40, 30, 25));
+        p.fillRect(0, 0, 10, 10, QColor(0, 0, 0));
+        p.end();
+        const QImage lifted = Filters::shadowsHighlights(img, 60, 0, 30);
+        CHECK(luma(lifted.pixelColor(50, 50)) > luma(img.pixelColor(50, 50)) + 25);          // shadows lighter
+        CHECK(lifted.pixelColor(50, 50).red() > lifted.pixelColor(50, 50).blue());          // still warm
+        CHECK(std::abs(luma(lifted.pixelColor(170, 50)) - luma(img.pixelColor(170, 50))) < 4);  // sky unchanged
+        CHECK(lifted.pixelColor(2, 2) == QColor(0, 0, 0));                                   // black stays black
+        const QImage tamed = Filters::shadowsHighlights(img, 0, 60, 30);
+        CHECK(luma(tamed.pixelColor(170, 50)) < luma(img.pixelColor(170, 50)) - 10);        // highlights darker
+        CHECK(Filters::shadowsHighlights(img, 0, 0, 30) == img);
+        QImage half = img;
+        half.fill(QColor(0, 0, 0, 0));
+        QPainter hp(&half);
+        hp.fillRect(0, 0, 100, 100, QColor(20, 20, 20, 128));
+        hp.end();
+        CHECK(Filters::shadowsHighlights(half, 60, 0, 30).pixelColor(50, 50).alpha() == 128);  // alpha kept
+    }
+
+    // --- Reduce Noise: grain on a flat gray, next to a sharp edge.
+    {
+        QImage img(120, 80, QImage::Format_ARGB32_Premultiplied);
+        QRandomGenerator rng(42);
+        for (int y = 0; y < 80; ++y)
+            for (int x = 0; x < 120; ++x) {
+                const int base = x < 60 ? 100 : 200;
+                auto n = [&] { return int(rng.bounded(31)) - 15; };
+                const int g = n();
+                img.setPixelColor(x, y, QColor(base + g + n() / 2, base + g, base + g + n() / 2));  // grain + color noise
+            }
+        auto spread = [](const QImage &im, auto channel) {  // standard deviation in the flat left part
+            double sum = 0, sq = 0;
+            int n = 0;
+            for (int y = 10; y < 70; ++y)
+                for (int x = 10; x < 50; ++x) {
+                    const double v = channel(im.pixelColor(x, y));
+                    sum += v; sq += v * v; ++n;
+                }
+            return std::sqrt(sq / n - (sum / n) * (sum / n));
+        };
+        const QImage clean = Filters::reduceNoise(img, 60, 60);
+        auto lumaOf = [&](const QColor &c) { return luma(c); };
+        auto chromaOf = [](const QColor &c) { return double(c.red() - c.blue()); };
+        CHECK(spread(clean, lumaOf) < spread(img, lumaOf) * 0.5);
+        CHECK(spread(clean, chromaOf) < spread(img, chromaOf) * 0.5);
+        CHECK(luma(clean.pixelColor(56, 40)) < 125 && luma(clean.pixelColor(63, 40)) > 175);  // the edge stays sharp
+        CHECK(Filters::reduceNoise(img, 0, 0) == img);
+    }
+
+    // --- Red Eye: a red pupil in an eye on skin.
+    {
+        QImage img(300, 200, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(225, 185, 160));  // skin
+        QPainter p(&img);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Qt::white);
+        p.drawEllipse(QPointF(100, 100), 30, 16);
+        p.setBrush(QColor(90, 60, 40));  // brown iris
+        p.drawEllipse(QPointF(100, 100), 14, 14);
+        p.setBrush(QColor(210, 35, 40));  // red pupil
+        p.drawEllipse(QPointF(100, 100), 7, 7);
+        p.setBrush(QColor(200, 40, 70));  // red lips, away from the eye
+        p.drawEllipse(QPointF(230, 160), 30, 10);
+        p.end();
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        tools->setCurrent(Tool::RedEye);
+        drag(c, {101, 99}, {101, 99});                                                     // a click
+        const QColor pupil = px(d, 100, 100);
+        CHECK(pupil.red() < 60 && std::abs(pupil.red() - pupil.green()) < 25);             // dark, not red
+        CHECK(px(d, 100, 88) == QColor(90, 60, 40) && px(d, 75, 100) == QColor(Qt::white)); // iris and eye white kept
+        CHECK(px(d, 230, 160) == QColor(200, 40, 70));                                     // lips untouched
+        CHECK(d->undoStack()->undoText() == "Red Eye");
+        d->undoStack()->undo();
+        const int steps = d->undoStack()->count();
+        drag(c, {40, 40}, {40, 40});                                                       // no red eye there
+        CHECK(d->undoStack()->count() == steps && px(d, 40, 40) == QColor(225, 185, 160));
+        drag(c, {80, 85}, {120, 115});                                                     // a box around the eye
+        CHECK(px(d, 100, 100).red() < 60);
+        settings->darkenAmount = 0;
+        d->undoStack()->undo();
+        drag(c, {80, 85}, {120, 115});
+        CHECK(px(d, 100, 100).red() > pupil.red());                                        // less dark
+        settings->darkenAmount = 50;
+        tools->setCurrent(Tool::Brush);
+    }
+
+    // --- Color Replacement: a shaded red object next to a gray background becomes blue.
+    {
+        QImage img(200, 100, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(128, 128, 128));
+        for (int y = 0; y < 100; ++y)
+            for (int x = 0; x < 100; ++x)
+                img.setPixelColor(x, y, QColor(120 + y, 20 + y / 5, 20 + y / 5));  // red, shaded top to bottom
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        settings->size = 40;
+        settings->tolerance = 60;
+        settings->contiguous = true;
+        settings->sampleOnce = false;
+        settings->replaceMode = 0;
+        settings->setForeground(QColor(30, 60, 220));
+        tools->setCurrent(Tool::ColorReplacement);
+        drag(c, {80, 10}, {80, 90});
+        const QColor top = px(d, 85, 15), bottom = px(d, 85, 85);
+        CHECK(top.blue() > top.red() && bottom.blue() > bottom.red());                       // blue now
+        CHECK(luma(bottom) > luma(top) + 15);                                                // shading kept
+        CHECK(std::abs(luma(bottom) - luma(img.pixelColor(85, 85))) < 12);
+        CHECK(px(d, 100, 50) == QColor(128, 128, 128));                                      // gray background kept
+        CHECK(px(d, 30, 50) == img.pixelColor(30, 50));                                      // outside the brush
+        CHECK(d->undoStack()->undoText() == "Color Replacement");
+        d->undoStack()->undo();
+        settings->replaceMode = 3;  // Luminosity: the foreground's brightness, the object's color
+        drag(c, {80, 10}, {80, 90});
+        const QColor lum = px(d, 85, 85);
+        CHECK(lum.red() > lum.blue() && std::abs(luma(lum) - luma(QColor(30, 60, 220))) < 12);
+        settings->replaceMode = 0;
+        settings->resetColors();
+        settings->size = 20;
+        settings->tolerance = 32;
+        tools->setCurrent(Tool::Brush);
+    }
+}
+
+
 // Damaged and malicious files must fail cleanly and quickly, never crash or hang.
 // (Regressions for bugs found by the fuzzer in tests/fuzz_files.cpp.)
 static void testDamagedFiles()
@@ -2310,6 +2452,7 @@ int main(int argc, char **argv) {
     testOnCanvasText(w, tools, settings);
     testToolPack(w, tools, settings);
     testCutout(w, tools, settings);
+    testEverydayFixes(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

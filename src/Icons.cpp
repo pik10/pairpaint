@@ -179,6 +179,36 @@ QIcon toolIcon(Tool::Id id)
         p.drawPath(tip);
         break;
     }
+    case Tool::ColorReplacement: {
+        // A brush over a two-color swatch: one color becomes another.
+        p.setPen(QPen(ink, 4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(46, 6, 28, 24);
+        QPainterPath tip(QPointF(28, 21));
+        tip.quadTo(12, 20, 9, 42);
+        tip.quadTo(30, 40, 30, 26);
+        tip.closeSubpath();
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawPath(tip);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(46, 46), 12, 12);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawPie(QRectF(34, 34, 24, 24), 45 * 16, 180 * 16);
+        break;
+    }
+    case Tool::RedEye: {
+        // An eye with a big pupil.
+        QPainterPath eye(QPointF(6, 32));
+        eye.quadTo(32, 6, 58, 32);
+        eye.quadTo(32, 58, 6, 32);
+        p.drawPath(eye);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawEllipse(QPointF(32, 32), 9, 9);
+        break;
+    }
     case Tool::Eraser:
         p.translate(32, 32);
         p.rotate(-45);

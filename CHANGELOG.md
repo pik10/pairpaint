@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### New
+Everyday photo fixes, all working directly on the photo:
+- **Image > Adjustments > Shadows/Highlights**: lightens dark areas and darkens bright ones,
+  judged by their surroundings, so a backlit person gets lighter without washing out the sky.
+- **Filter > Reduce Noise**: smooths grain from low-light and phone photos while keeping edges
+  sharp, and removes color noise (blotches of color) separately.
+- **Red Eye tool**: click on a red pupil, or drag a box around the eye, and it becomes a natural
+  dark gray. Options: Pupil size and Darken amount.
+- **Color Replacement brush** (Shift+B): paint over an object to give it the foreground color
+  while keeping its shading, e.g. a red shirt becomes blue. Like the Background Eraser, it only
+  changes the color under the + (Sampling, Tolerance, Contiguous); Mode can also change just
+  the hue, saturation or luminosity.
+
 ## 0.8.0 — 2026-10-11
 
 ### New

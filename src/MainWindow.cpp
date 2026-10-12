@@ -63,10 +63,12 @@ QList<int> optionsForTool(int id)
     using T = Tool;
     // Same order as MainWindow::Option.
     enum { Size, Hardness, Opacity, Tolerance, Contiguous, SampleMerged, Fill, Antialias, Radial, Font, Pressure, Range,
-           Sponge, CropRatio, Smoothing, Sampling, Protect };
+           Sponge, CropRatio, Smoothing, Sampling, Protect, ReplaceMode, Pupil, Darken };
     switch (id) {
     case T::Brush:
     case T::Eraser: return {Size, Hardness, Opacity, Smoothing, Pressure};
+    case T::ColorReplacement: return {Size, Hardness, ReplaceMode, Sampling, Tolerance, Contiguous, Smoothing, Pressure};
+    case T::RedEye: return {Pupil, Darken};
     case T::BackgroundEraser: return {Size, Hardness, Sampling, Tolerance, Contiguous, Protect, Smoothing, Pressure};
     case T::CloneStamp:
     case T::Healing: return {Size, Hardness, Opacity, Smoothing, SampleMerged, Pressure};
@@ -305,6 +307,13 @@ void MainWindow::createMenus()
         const QString suffix = type == Adjustment::Invert ? QString() : QStringLiteral("…");
         addAction(adjust, Adjustments::name(type) + suffix, key, [this, type] { runAdjustment(type); });
     }
+    addAction(adjust, tr("Shado&ws/Highlights…"), {}, [this] {
+        runFilter(tr("Shadows/Highlights"),
+                  {{tr("Shadows"), 0, 100, 35, QStringLiteral("%")},
+                   {tr("Highlights"), 0, 100, 0, QStringLiteral("%")},
+                   {tr("Radius"), 1, 250, 30, tr(" px")}},
+                  [](const QImage &img, const QList<int> &v) { return Filters::shadowsHighlights(img, v[0], v[1], v[2]); });
+    });
     adjust->addSeparator();
     const QList<std::tuple<QString, QKeySequence, Adjustments::Auto>> autos = {
         {tr("Auto &Tone"), QKeySequence("Ctrl+Shift+L"), Adjustments::Auto::Tone},
@@ -443,6 +452,12 @@ void MainWindow::createMenus()
     addAction(filter, tr("Add &Noise…"), {}, [this] {
         runFilter(tr("Add Noise"), {{tr("Amount"), 1, 100, 15, QStringLiteral("%")}},
                   [](const QImage &img, const QList<int> &v) { return Filters::addNoise(img, v[0]); });
+    });
+    addAction(filter, tr("&Reduce Noise…"), {}, [this] {
+        runFilter(tr("Reduce Noise"),
+                  {{tr("Strength"), 0, 100, 40, QStringLiteral("%")},
+                   {tr("Color noise"), 0, 100, 50, QStringLiteral("%")}},
+                  [](const QImage &img, const QList<int> &v) { return Filters::reduceNoise(img, v[0], v[1]); });
     });
     addAction(filter, tr("&Pixelate…"), {}, [this] {
         runFilter(tr("Pixelate"), {{tr("Cell size"), 2, 200, 10, tr(" px")}},
@@ -668,6 +683,16 @@ void MainWindow::createOptionsBar()
     connect(sampling, &QComboBox::currentIndexChanged, this, [s](int v) { s->sampleOnce = v == 1; });
     m_optionActions[OptSampling] = labelled(tr("Sampling:"), sampling);
     check(OptProtect, tr("Protect foreground color"), s->protectForeground, [s](bool v) { s->protectForeground = v; });
+    auto *replaceMode = new QComboBox;
+    replaceMode->addItems({tr("Color"), tr("Hue"), tr("Saturation"), tr("Luminosity")});
+    replaceMode->setCurrentIndex(s->replaceMode);
+    replaceMode->setToolTip(tr("Color: takes the hue and saturation of the foreground color. Hue or Saturation: only "
+                               "that. Luminosity: takes its brightness, keeping the colors."));
+    connect(replaceMode, &QComboBox::currentIndexChanged, this, [s](int v) { s->replaceMode = v; });
+    m_optionActions[OptReplaceMode] = labelled(tr("Mode:"), replaceMode);
+    QSpinBox *pupil = spin(OptPupil, tr("Pupil size:"), 1, 100, s->pupilSize, QStringLiteral("%"), [s](int v) { s->pupilSize = v; });
+    pupil->setToolTip(tr("Higher values also fix orange-red pixels around the pupil."));
+    spin(OptDarken, tr("Darken amount:"), 0, 100, s->darkenAmount, QStringLiteral("%"), [s](int v) { s->darkenAmount = v; });
     bar->widgetForAction(m_optionActions[OptProtect])->setToolTip(
         tr("Never erases the foreground color: pick a color of the object with the Eyedropper to keep it safe."));
 
