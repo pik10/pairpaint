@@ -81,6 +81,8 @@ QImage layerCoverage(const QImage &image, const QImage &mask);
 // `coverage`, from layerCoverage) the colors of the solid object next to them, so no tint of
 // the old background shows around it. `amount` 0..100. Alpha is unchanged.
 QImage decontaminate(const QImage &src, const QImage &coverage, int amount);
+// Whether `coverage` (from layerCoverage) has partly covered pixels for decontaminate to clean.
+bool hasSoftEdges(const QImage &coverage);
 
 // The Paint Bucket's coverage: `region` (from floodMask) plus the soft edge pixels around it,
 // each covered as much as it is made of the clicked color (it is a mix of that color and the

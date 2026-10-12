@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+Found by a code review of 0.8 and 0.9:
+- Color Replacement mixed the plain foreground color into soft (partly transparent) edge
+  pixels, which could leave a fringe of that color around cut-out objects.
+- Reduce Noise washed out colors along the edges of objects on a transparent background, and
+  Shadows/Highlights left a light halo there: transparent areas counted as gray or black.
+- The Red Eye tool turned an editable text layer into pixels even when it found no red eye.
+- Decontaminate Colors switched off mask editing (so the next brush stroke went to the layer
+  instead of its mask), and with a group selected it said "no soft edges" instead of explaining
+  that groups aren't supported.
+- Alt-click or Ctrl-click to pick a color didn't work while a group was selected.
+- Dragging the Amount slider in Decontaminate Colors is much faster on large images.
+
 ## 0.9.0 — 2026-10-12
 
 ### New

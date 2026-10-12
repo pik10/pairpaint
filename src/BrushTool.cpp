@@ -48,8 +48,6 @@ public:
     // A click that may start a stroke. False when it does something else instead (setting a clone
     // source) or the stroke can't start; the effect tells the user why.
     virtual bool press(Stroke &, const ToolEvent &, Canvas *) { return true; }
-    // Whether the tool paints with the foreground color, so Alt/Ctrl-click picks it.
-    virtual bool picksColor() const { return false; }
     // Whether Shift-click draws a straight line from the end of the last stroke.
     virtual bool drawsLines() const { return true; }
     // Whether the stroke collects its dabs in Stroke::buffer.
@@ -146,7 +144,6 @@ protected:
 class PaintEffect : public BrushEffect {
 public:
     Tool::Id id() const override { return Tool::Brush; }
-    bool picksColor() const override { return true; }
 
 protected:
     QColor dabColor(const Stroke &s) const override { return s.settings->foreground(); }
@@ -167,14 +164,6 @@ public:
 // judged on the layer as it was before the stroke.
 class ColorMatchEffect : public BrushEffect {
 public:
-    bool press(Stroke &s, const ToolEvent &, Canvas *) override
-    {
-        if (!s.doc->editingMask())
-            return true;
-        showTip(QObject::tr("The %1 works on the layer's pixels. Press Ctrl+\\ to edit them.").arg(Tool::name(id())));
-        return false;
-    }
-
     void begin(Stroke &s, const ToolEvent &e) override
     {
         // "Once": the color clicked is the one erased for the whole stroke.
@@ -287,12 +276,20 @@ protected:
 class ColorReplaceEffect : public ColorMatchEffect {
 public:
     Tool::Id id() const override { return Tool::ColorReplacement; }
-    bool picksColor() const override { return true; }
     void show(Stroke &s, const QRect &r) override
     {
         static constexpr QPainter::CompositionMode modes[] = {Blend::Color, Blend::Hue, Blend::Saturation, Blend::Luminosity};
         const QImage before = s.base.copy(r);
-        QImage recolored = before;
+        // Recolor each pixel as if it were opaque, so a soft edge pixel gets the blend of its own color
+        // (blending onto a partly transparent pixel would mix in the plain foreground color); its
+        // transparency is put back afterwards.
+        QImage recolored = before.convertToFormat(QImage::Format_ARGB32);
+        for (int y = 0; y < recolored.height(); ++y) {
+            QRgb *p = reinterpret_cast<QRgb *>(recolored.scanLine(y));
+            for (int x = 0; x < recolored.width(); ++x)
+                p[x] |= 0xff000000u;
+        }
+        recolored.convertTo(QImage::Format_ARGB32_Premultiplied);
         QImage paint(r.size(), QImage::Format_ARGB32_Premultiplied);
         paint.fill(s.settings->foreground().rgb());  // opaque: only its color counts
         Blend::draw(recolored, paint, modes[std::clamp(s.settings->replaceMode, 0, 3)], 1.0, r.topLeft());
@@ -634,7 +631,7 @@ public:
         if (e.button != Qt::LeftButton)
             return;
         m_stroke.doc = m_doc;
-        if (m_effect->picksColor() && pickForeground(e, m_doc, m_settings))
+        if (picksColor(id()) && pickForeground(e, m_doc, m_settings))
             return;
         if (!m_effect->press(m_stroke, e, m_canvas))
             return;

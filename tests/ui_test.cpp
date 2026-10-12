@@ -6,6 +6,7 @@
 
 #include "Adjustments.h"
 #include "Autosave.h"
+#include "Blending.h"
 #include "Canvas.h"
 #include "Document.h"
 #include "FileIO.h"
@@ -33,11 +34,13 @@
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QStyleFactory>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QtMath>
+#include <QTimer>
 #include <QTreeWidget>
 #include <cmath>
 #include <cstdio>
@@ -1231,8 +1234,132 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
         tools->setCurrent(Tool::Brush);
         drag(c, {20, 30}, {30, 30});                                                       // paints with the picked color
         CHECK(px(d, 25, 30) == QColor(240, 200, 20));
+        // Also with a group selected (painting is refused there, picking isn't).
+        d->newGroup();
+        CHECK(d->activeLayer().isGroup());
+        settings->resetColors();
+        drag(c, {80, 30}, {80, 30}, Qt::AltModifier);
+        CHECK(settings->foreground() == QColor(240, 200, 20));
         settings->resetColors();
     }
+}
+
+// Regressions for the code review of 0.8 and 0.9.
+static void testReviewFixes0_9(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    auto newDoc = [&](const QImage &img) {
+        w.addDocument(new Document(img));
+        auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+        c->fitToWindow();
+        return c;
+    };
+    auto closeDialogSoon = [] {
+        QTimer::singleShot(50, [] { if (QWidget *m = QApplication::activeModalWidget()) m->close(); });
+    };
+    // A red square on a transparent background.
+    QImage cut(100, 100, QImage::Format_ARGB32_Premultiplied);
+    cut.fill(Qt::transparent);
+    QPainter p(&cut);
+    p.fillRect(30, 30, 40, 40, QColor(220, 30, 30));
+    p.end();
+
+    // Reduce Noise and Shadows/Highlights don't treat transparent pixels as gray or black.
+    const QColor edge = Filters::reduceNoise(cut, 40, 80).pixelColor(31, 50);
+    CHECK(edge.red() - edge.green() > 150 && edge.alpha() == 255);
+    QImage dark = cut;
+    dark.fill(Qt::transparent);
+    QPainter dp(&dark);
+    dp.fillRect(20, 20, 60, 60, QColor(60, 60, 60));
+    dp.end();
+    const QImage lifted = Filters::shadowsHighlights(dark, 60, 0, 8);
+    CHECK(std::abs(lifted.pixelColor(21, 50).red() - lifted.pixelColor(50, 50).red()) <= 3);  // no halo
+
+    // Color Replacement on a half transparent pixel keeps its own hue in Luminosity mode.
+    {
+        QImage half(100, 60, QImage::Format_ARGB32_Premultiplied);
+        half.fill(qPremultiply(qRgba(200, 40, 40, 128)));
+        Canvas *c = newDoc(half);
+        Document *d = c->document();
+        settings->replaceMode = 3;
+        settings->setForeground(QColor(30, 60, 220));
+        tools->setCurrent(Tool::ColorReplacement);
+        drag(c, {50, 10}, {50, 50});
+        const QColor q = px(d, 50, 30);
+        CHECK(q.alpha() == 128 && q.red() > q.blue() + 40);
+        settings->replaceMode = 0;
+        drag(c, {50, 10}, {50, 50});
+        CHECK(px(d, 50, 30).blue() > px(d, 50, 30).red());                                // Color mode: blue
+        settings->resetColors();
+    }
+
+    // Red Eye on a text layer with no red eye leaves the text editable and adds no undo step.
+    {
+        QImage white(300, 200, QImage::Format_ARGB32_Premultiplied);
+        white.fill(Qt::white);
+        Canvas *c = newDoc(white);
+        Document *d = c->document();
+        TextData td;
+        td.text = "Hi";
+        td.font = QFont("Sans Serif");
+        td.font.setPixelSize(40);
+        td.pos = {50, 100};
+        d->addTextLayer(td);
+        const int steps = d->undoStack()->count();
+        tools->setCurrent(Tool::RedEye);
+        drag(c, {200, 50}, {200, 50});
+        CHECK(d->activeLayer().isText() && d->undoStack()->count() == steps);
+    }
+
+    // Tools that judge colors are refused on a mask, before anything happens.
+    {
+        Canvas *c = newDoc(cut);
+        Document *d = c->document();
+        d->addMask(false);
+        const int steps = d->undoStack()->count();
+        for (Tool::Id id : {Tool::RedEye, Tool::ColorReplacement, Tool::BackgroundEraser}) {
+            tools->setCurrent(id);
+            drag(c, {40, 40}, {60, 60});
+        }
+        CHECK(d->undoStack()->count() == steps && d->editingMask());
+
+        // Decontaminate Colors leaves mask editing on, whether it has nothing to do or is cancelled.
+        QAction *decon = action(&w, "Decontaminate Colors…");
+        closeDialogSoon();
+        decon->trigger();                                                                  // no soft edges
+        CHECK(d->editingMask());
+        d->undoStack()->undo();                                                            // the mask
+        d->featherSelection(0);
+        QPainterPath sq;
+        sq.addRect(30, 30, 40, 40);
+        d->selectPath(sq, SelectionOp::Replace, false, "Select");
+        d->featherSelection(3);
+        d->addMask(true);                                                                  // a soft mask
+        CHECK(d->editingMask());
+        closeDialogSoon();
+        decon->trigger();                                                                  // cancelled
+        CHECK(d->editingMask() && d->undoStack()->undoText() != "Decontaminate Colors");
+        // Groups get a clear message, not "no soft edges".
+        d->newGroup();
+        decon->trigger();
+        CHECK(w.statusBar()->currentMessage().contains("not a group"));
+    }
+
+    // The preview shortcut (full result mixed by Amount) matches running the filter at that amount.
+    {
+        QImage obj(60, 10, QImage::Format_ARGB32);
+        obj.fill(Qt::transparent);
+        for (int y = 0; y < 10; ++y)
+            for (int x = 0; x < 40; ++x)
+                obj.setPixel(x, y, x < 30 ? qRgba(0, 200, 0, 255) : qRgba(0, 100, 120, 255 - (x - 29) * 25));
+        const QImage layer = obj.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        const QImage cov = Filters::layerCoverage(layer, QImage());
+        CHECK(Filters::hasSoftEdges(cov) && !Filters::hasSoftEdges(Filters::layerCoverage(cut, QImage())));
+        QImage mixed = layer;
+        Blend::mix(mixed, Filters::decontaminate(layer, cov, 100), 0.5, QImage(), layer.rect());
+        const QColor a = mixed.pixelColor(33, 5), b = Filters::decontaminate(layer, cov, 50).pixelColor(33, 5);
+        CHECK(std::abs(a.green() - b.green()) <= 3 && std::abs(a.blue() - b.blue()) <= 3);
+    }
+    tools->setCurrent(Tool::Brush);
 }
 
 
@@ -2478,6 +2605,7 @@ int main(int argc, char **argv) {
     testToolPack(w, tools, settings);
     testCutout(w, tools, settings);
     testEverydayFixes(w, tools, settings);
+    testReviewFixes0_9(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

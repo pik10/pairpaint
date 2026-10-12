@@ -3,6 +3,7 @@
 
 #include "MainWindow.h"
 
+#include "Blending.h"
 #include "Canvas.h"
 #include "ColorWidgets.h"
 #include "Dialogs.h"
@@ -1328,26 +1329,34 @@ void MainWindow::colorRange()
 void MainWindow::decontaminateColors()
 {
     withDoc([&](Document *d) {
-        if (!hasPixels(d))
-            return;
-        if (d->editingMask())
-            d->setEditingMask(false);  // it recolors the layer's pixels, guided by the mask
         const Layer &l = d->activeLayer();
-        const QImage coverage = Filters::layerCoverage(l.image, l.maskEnabled ? l.mask : QImage());
-        bool soft = false;
-        for (int y = 0; y < coverage.height() && !soft; ++y) {
-            const uchar *c = coverage.constScanLine(y);
-            soft = std::any_of(c, c + coverage.width(), [](uchar v) { return v > 0 && v < 250; });
+        if (l.kind != LayerKind::Normal || l.isAdjustment()) {
+            statusBar()->showMessage(tr("Decontaminate Colors works on a layer with pixels, not a group or "
+                                        "adjustment layer."), 4000);
+            return;
         }
-        if (!soft) {
+        const QImage coverage = Filters::layerCoverage(l.image, l.maskEnabled ? l.mask : QImage());
+        if (!Filters::hasSoftEdges(coverage)) {
             QMessageBox::information(this, tr("Decontaminate Colors"),
                                      tr("This layer has no soft edges to clean up.\n\nCut the object out first: "
                                         "add a layer mask (Layer > Layer Mask > Reveal Selection) or erase "
                                         "its background."));
             return;
         }
+        // It recolors the layer's pixels, guided by the mask; mask editing comes back afterwards.
+        const bool editingMask = d->editingMask();
+        d->setEditingMask(false);
+        // The slider only sets how much of the full result shows, so that is worked out once.
+        auto full = std::make_shared<QImage>();
         runFilter(tr("Decontaminate Colors"), {{tr("Amount"), 1, 100, 100, QStringLiteral("%")}},
-                  [coverage](const QImage &img, const QList<int> &v) { return Filters::decontaminate(img, coverage, v[0]); });
+                  [coverage, full](const QImage &img, const QList<int> &v) {
+                      if (full->isNull())
+                          *full = Filters::decontaminate(img, coverage, 100);
+                      QImage out = img;
+                      Blend::mix(out, *full, v[0] / 100.0, QImage(), img.rect());
+                      return out;
+                  });
+        d->setEditingMask(editingMask);
     });
 }
 

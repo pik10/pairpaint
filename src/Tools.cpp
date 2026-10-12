@@ -575,10 +575,6 @@ private:
 
     void fix()
     {
-        if (m_doc->editingMask()) {
-            showTip(QObject::tr("The Red Eye tool works on the layer's pixels. Press Ctrl+\\ to edit them."));
-            return;
-        }
         QRect area;
         if (isBox()) {
             area = QRectF(m_start, m_end).normalized().toAlignedRect();
@@ -590,7 +586,6 @@ private:
         area &= m_doc->rect();
         if (area.isEmpty())
             return;
-        m_doc->prepareForPixelEdit();
         const QImage fixed = Filters::redEye(m_doc->targetImage().copy(area), m_settings->pupilSize, m_settings->darkenAmount);
         if (fixed.isNull()) {
             showTip(QObject::tr("No red eye found here. Click on the red pupil, or drag a box around the eye."));
@@ -1729,6 +1724,21 @@ QString Tool::hint(Id id)
     case Count: break;
     }
     return {};
+}
+
+bool Tool::picksColor(Id id)
+{
+    switch (id) {
+    case Brush: case ColorReplacement: case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool Tool::needsLayerPixels(Id id)
+{
+    return id == ColorReplacement || id == BackgroundEraser || id == RedEye;
 }
 
 bool Tool::editsPixels(Id id)

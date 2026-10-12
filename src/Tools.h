@@ -66,6 +66,10 @@ public:
     static QString shortcut(Id id);
     static QString hint(Id id);
     static bool editsPixels(Id id);  // tools that need a layer with pixels (not a group)
+    // Tools that judge the layer's colors, so they can't work on a layer mask.
+    static bool needsLayerPixels(Id id);
+    // Tools that paint with the foreground color: Alt-click or Ctrl-click picks it from the image.
+    static bool picksColor(Id id);
 
 protected:
     ToolSettings *m_settings;

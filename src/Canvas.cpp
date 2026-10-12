@@ -556,10 +556,20 @@ void Canvas::mousePressEvent(QMouseEvent *e)
             }
         }
     }
-    if (e->button() == Qt::LeftButton && Tool::editsPixels(m_tools->currentId()) && !m_doc->canEditPixels()) {
-        QToolTip::showText(e->globalPosition().toPoint(),
-                           tr("A group is selected. Select a layer inside it to paint, or add a mask to the group."));
-        return;
+    const Tool::Id id = m_tools->currentId();
+    // Alt/Ctrl-click with a painting tool only picks a color, which works on anything.
+    const bool picking = Tool::picksColor(id) && (e->modifiers() & (Qt::AltModifier | Qt::ControlModifier));
+    if (e->button() == Qt::LeftButton && !picking) {
+        if (Tool::editsPixels(id) && !m_doc->canEditPixels()) {
+            QToolTip::showText(e->globalPosition().toPoint(),
+                               tr("A group is selected. Select a layer inside it to paint, or add a mask to the group."));
+            return;
+        }
+        if (Tool::needsLayerPixels(id) && m_doc->editingMask()) {
+            QToolTip::showText(e->globalPosition().toPoint(),
+                               tr("The %1 works on the layer's pixels. Press Ctrl+\\ to edit them.").arg(Tool::name(id)));
+            return;
+        }
     }
     m_toolPressed = true;
     tool()->press(toolEvent(e));

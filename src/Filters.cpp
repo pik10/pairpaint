@@ -952,13 +952,25 @@ QImage layerCoverage(const QImage &image, const QImage &mask)
     return out;
 }
 
+// Coverage from which a pixel counts as the object itself, for Decontaminate Colors.
+constexpr int kSolid = 250;
+
+bool hasSoftEdges(const QImage &coverage)
+{
+    for (int y = 0; y < coverage.height(); ++y) {
+        const uchar *c = coverage.constScanLine(y);
+        if (std::any_of(c, c + coverage.width(), [](uchar v) { return v > 0 && v < kSolid; }))
+            return true;
+    }
+    return false;
+}
+
 QImage decontaminate(const QImage &src, const QImage &coverage, int amount)
 {
     QImage img = src.convertToFormat(QImage::Format_ARGB32);
     const int w = img.width(), h = img.height();
-    if (amount <= 0 || coverage.size() != img.size() || w == 0 || h == 0)
+    if (amount <= 0 || coverage.size() != img.size() || w == 0 || h == 0 || !hasSoftEdges(coverage))
         return src;
-    constexpr int kSolid = 250;  // coverage from which a pixel counts as the object itself
     constexpr int kReach = 64;   // how far (px) object colors spread out from the solid part
     constexpr quint8 kUnseen = 255;
 
@@ -973,13 +985,11 @@ QImage decontaminate(const QImage &src, const QImage &coverage, int amount)
             if (cov[x] >= kSolid)
                 dist[size_t(y) * w + x] = 0;
     }
-    bool anySoft = false;
     for (int y = 0; y < h; ++y) {
         const uchar *cov = coverage.constScanLine(y);
         for (int x = 0; x < w; ++x) {
             if (cov[x] >= kSolid)
                 continue;
-            anySoft |= cov[x] > 0;
             // Solid pixels next to this one start the spreading.
             for (int dy = -1; dy <= 1; ++dy)
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -991,8 +1001,6 @@ QImage decontaminate(const QImage &src, const QImage &coverage, int amount)
                 }
         }
     }
-    if (!anySoft)
-        return src;
     for (int i : ring)
         dist[size_t(i)] = 0;
 
@@ -1054,8 +1062,9 @@ QImage reduceNoise(const QImage &src, int strength, int color)
         return src;
     // Brightness (Y) and color (Cb, Cr) are smoothed separately: grain in Y is smoothed only among
     // similar neighbors, which keeps edges; color noise can be blurred much further unnoticed.
-    std::vector<float> Y(size_t(w) * h);
-    QImage chroma(w, h, QImage::Format_ARGB32);  // Cb + 128 in red, Cr + 128 in green
+    // Transparent pixels have no color of their own: every average below is weighted by alpha.
+    std::vector<float> Y(size_t(w) * h), A(size_t(w) * h);
+    QImage chroma(w, h, QImage::Format_ARGB32);  // Cb + 128 in red, Cr + 128 in green, the pixel's alpha
     uchar *chromaBits = chroma.bits();
     const qsizetype chromaBpl = chroma.bytesPerLine();
     parallelFor(h, [&](int y) {
@@ -1065,10 +1074,12 @@ QImage reduceNoise(const QImage &src, int strength, int color)
             const float r = qRed(in[x]), g = qGreen(in[x]), b = qBlue(in[x]);
             const float l = 0.299f * r + 0.587f * g + 0.114f * b;
             Y[size_t(y) * w + x] = l;
-            c[x] = qRgb(clamp255(qRound(0.564f * (b - l)) + 128), clamp255(qRound(0.713f * (r - l)) + 128), 0);
+            A[size_t(y) * w + x] = qAlpha(in[x]) / 255.0f;
+            c[x] = qRgba(clamp255(qRound(0.564f * (b - l)) + 128), clamp255(qRound(0.713f * (r - l)) + 128), 0,
+                         qAlpha(in[x]));
         }
     });
-    if (color > 0)
+    if (color > 0)  // blurred premultiplied, so back in straight colors it is an alpha-weighted average
         chroma = gaussianBlur(chroma, color / 100.0 * 4.0).convertToFormat(QImage::Format_ARGB32);
 
     std::vector<float> outY = Y;
@@ -1091,15 +1102,18 @@ QImage reduceNoise(const QImage &src, int strength, int color)
                 for (int dy = -r; dy <= r; ++dy) {
                     const int ny = std::clamp(y + dy, 0, h - 1);
                     const float *row = &Y[size_t(ny) * w];
+                    const float *alpha = &A[size_t(ny) * w];
                     const float *sp = &spatial[size_t(dy + r) * (2 * r + 1) + r];
                     for (int dx = -r; dx <= r; ++dx) {
-                        const float v = row[std::clamp(x + dx, 0, w - 1)];
-                        const float k = sp[dx] * range[std::min(255, int(std::abs(v - c)))];
+                        const int nx = std::clamp(x + dx, 0, w - 1);
+                        const float v = row[nx];
+                        const float k = sp[dx] * range[std::min(255, int(std::abs(v - c)))] * alpha[nx];
                         sum += v * k;
                         weight += k;
                     }
                 }
-                outY[size_t(y) * w + x] = sum / weight;
+                if (weight > 0)
+                    outY[size_t(y) * w + x] = sum / weight;
             }
         });
     }
@@ -1129,14 +1143,15 @@ QImage shadowsHighlights(const QImage &src, int shadows, int highlights, int rad
     if (img.isNull() || (shadows <= 0 && highlights <= 0))
         return src;
     auto luma = [](QRgb p) { return (0.299f * qRed(p) + 0.587f * qGreen(p) + 0.114f * qBlue(p)) / 255.0f; };
-    // How bright each pixel's surroundings are.
+    // How bright each pixel's surroundings are: blurred with alpha, so transparent pixels don't
+    // count as dark ones.
     QImage around(w, h, QImage::Format_ARGB32);
     for (int y = 0; y < h; ++y) {
         const QRgb *in = reinterpret_cast<const QRgb *>(img.constScanLine(y));
         QRgb *o = reinterpret_cast<QRgb *>(around.scanLine(y));
         for (int x = 0; x < w; ++x) {
             const int l = qRound(luma(in[x]) * 255);
-            o[x] = qRgb(l, l, l);
+            o[x] = qRgba(l, l, l, qAlpha(in[x]));
         }
     }
     around = gaussianBlur(around, std::max(1, radius)).convertToFormat(QImage::Format_ARGB32);
