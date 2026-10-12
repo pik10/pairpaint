@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2 — 2026-10-12
+
+### Changed
+- The downloads now include the licenses of the libraries they bundle (Qt and the code inside
+  it, and on Linux libheif, libde265, ICU and system libraries): `THIRD-PARTY-NOTICES.txt`, also
+  shown under Help > About PairPaint > Licenses. The macOS app now includes PairPaint's own
+  license too.
+- The Windows download is about 10 MB smaller: it no longer includes software OpenGL and the
+  Direct3D compiler, which PairPaint doesn't use.
+
 ## 0.9.1 — 2026-10-12
 
 ### Fixed
