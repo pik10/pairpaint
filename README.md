@@ -181,4 +181,8 @@ PairPaint is free software: you can redistribute it and/or modify it under the t
 GNU General Public License as published by the Free Software Foundation, either version 3 of
 the License, or (at your option) any later version. See [LICENSE](LICENSE).
 
+The release downloads also contain Qt and other libraries, each under its own license (LGPL,
+MIT, BSD and others). Their copyright notices, license texts and source code locations are in
+`THIRD-PARTY-NOTICES.txt` in each download, also shown under Help > About PairPaint > Licenses.
+
 Copyright © 2026 Peter Gniewek and PairPaint contributors.

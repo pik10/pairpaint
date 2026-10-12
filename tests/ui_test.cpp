@@ -18,6 +18,7 @@
 #include "ToolSettings.h"
 #include "Tools.h"
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QColorSpace>
@@ -29,8 +30,10 @@
 #include <QKeyEvent>
 #include <QLockFile>
 #include <QLabel>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QStandardPaths>
@@ -1242,6 +1245,51 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
         CHECK(settings->foreground() == QColor(240, 200, 20));
         settings->resetColors();
     }
+}
+
+// The About box offers the licenses of the bundled libraries when a release put them next to the program.
+static void testAboutBox(MainWindow &w)
+{
+    QAction *about = action(&w, "About PairPaint");
+    CHECK(about);
+    if (!about)
+        return;
+    auto aboutButtons = [&] {
+        QStringList texts;
+        QTimer::singleShot(50, [&] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                for (QAbstractButton *b : box->buttons())
+                    texts << b->text().remove('&');
+                box->close();
+            }
+        });
+        about->trigger();
+        return texts;
+    };
+    const QStringList buttons = aboutButtons();
+    CHECK(buttons.contains("OK") && !buttons.contains("Licenses…"));  // a development build has no notices
+
+    QFile notices(QDir(QCoreApplication::applicationDirPath()).filePath("THIRD-PARTY-NOTICES.txt"));
+    CHECK(notices.open(QIODevice::WriteOnly));
+    notices.write("Qt 6\nGNU LESSER GENERAL PUBLIC LICENSE\n");
+    notices.close();
+    QString shown;
+    QTimer::singleShot(50, [&] {
+        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        for (QAbstractButton *b : box ? box->buttons() : QList<QAbstractButton *>())
+            if (b->text().remove('&') == "Licenses…")
+                b->click();
+        QTimer::singleShot(50, [&] {
+            if (QWidget *dlg = QApplication::activeModalWidget()) {
+                if (auto *text = dlg->findChild<QPlainTextEdit *>())
+                    shown = text->toPlainText();
+                dlg->close();
+            }
+        });
+    });
+    about->trigger();
+    notices.remove();
+    CHECK(shown.contains("GNU LESSER GENERAL PUBLIC LICENSE"));
 }
 
 // Regressions for the code review of 0.8 and 0.9.
@@ -2606,6 +2654,7 @@ int main(int argc, char **argv) {
     testCutout(w, tools, settings);
     testEverydayFixes(w, tools, settings);
     testReviewFixes0_9(w, tools, settings);
+    testAboutBox(w);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

@@ -77,9 +77,16 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt
           ls AppDir/usr/plugins/imageformats
           ls AppDir/usr/lib | grep -E "libheif|libde265"
+          # The licenses of everything bundled, which the About box shows.
+          doc=AppDir/usr/share/doc/pairpaint
+          python3 .github/scripts/third-party-notices.py linux AppDir "$doc/THIRD-PARTY-NOTICES.txt" \
+            --component libheif 1.23.6 https://github.com/strukturag/libheif/tree/v1.23.6 libheif/COPYING \
+            --component libde265 1.1.3 https://github.com/strukturag/libde265/tree/v1.1.3 libde265/COPYING
+          cp LICENSE "$doc/LICENSE.txt"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
 
       - name: Smoke test
         env:
@@ -119,12 +126,16 @@ jobs:
           $dist = "dist\PairPaint"
           New-Item -ItemType Directory -Force $dist | Out-Null
           Copy-Item build\Release\pairpaint.exe $dist
-          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-compiler-runtime "$dist\pairpaint.exe"
+          # No software OpenGL or Direct3D compiler: PairPaint draws without OpenGL.
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-compiler-runtime --no-opengl-sw `
+            --no-system-d3d-compiler "$dist\pairpaint.exe"
           # Ship the Visual C++ runtime next to the exe, so users don't have to install it.
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
           Copy-Item "$($crt.FullName)\*.dll" $dist
           Copy-Item LICENSE "$dist\LICENSE.txt"
+          python .github/scripts/third-party-notices.py windows $dist "$dist\THIRD-PARTY-NOTICES.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem "$dist\imageformats" | Select-Object -ExpandProperty Name
 
       - name: Smoke test
@@ -183,6 +194,8 @@ jobs:
         run: |
           app=build/PairPaint.app
           "$QT_ROOT_DIR/bin/macdeployqt" "$app"
+          python3 .github/scripts/third-party-notices.py macos "$app" "$app/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+          cp LICENSE "$app/Contents/Resources/LICENSE.txt"
           # Ad-hoc signature: required on Apple Silicon after macdeployqt edits the binaries.
           # (Not a Developer ID signature, so Gatekeeper still asks on first launch.)
           codesign --force --deep --sign - "$app"

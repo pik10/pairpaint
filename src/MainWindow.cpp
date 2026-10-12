@@ -27,6 +27,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontComboBox>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -36,6 +37,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -45,6 +47,7 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
@@ -93,6 +96,19 @@ QList<int> optionsForTool(int id)
     case T::Lasso: return {Antialias};
     default: return {};
     }
+}
+
+// The licenses of the libraries shipped with a release download, which the release workflow puts
+// next to the program (Windows), in share/doc (Linux AppImage) or in Resources (macOS app).
+QString thirdPartyNoticesPath()
+{
+    const QDir dir(QCoreApplication::applicationDirPath());
+    for (const char *path : {"THIRD-PARTY-NOTICES.txt", "../share/doc/pairpaint/THIRD-PARTY-NOTICES.txt",
+                             "../Resources/THIRD-PARTY-NOTICES.txt"}) {
+        if (QFileInfo::exists(dir.filePath(QLatin1String(path))))
+            return dir.filePath(QLatin1String(path));
+    }
+    return {};
 }
 
 } // namespace
@@ -540,12 +556,37 @@ void MainWindow::createMenus()
     // Help
     QMenu *help = menuBar()->addMenu(tr("&Help"));
     addAction(help, tr("&About PairPaint"), {}, [this] {
-        QMessageBox::about(this, tr("About PairPaint"),
-                           tr("<h3>PairPaint %1</h3><p>A cross-platform layered image editor built with Qt %2.</p>"
-                              "<p>Created through pair programming between a human and an AI.</p>"
-                              "<p>Copyright © 2026 Peter Gniewek and PairPaint contributors.<br>"
-                              "Free software, licensed under the GNU General Public License v3 or later.</p>")
-                               .arg(QApplication::applicationVersion(), QString::fromLatin1(qVersion())));
+        QMessageBox box(QMessageBox::NoIcon, tr("About PairPaint"),
+                        tr("<h3>PairPaint %1</h3><p>A cross-platform layered image editor built with Qt %2.</p>"
+                           "<p>Created through pair programming between a human and an AI.</p>"
+                           "<p>Copyright © 2026 PairPaint contributors.<br>"
+                           "Free software, licensed under the GNU General Public License v3 or later.</p>"
+                           "<p>PairPaint uses Qt and other free software, each under its own license.</p>")
+                            .arg(QApplication::applicationVersion(), QString::fromLatin1(qVersion())),
+                        QMessageBox::NoButton, this);
+        box.setIconPixmap(windowIcon().pixmap(box.style()->pixelMetric(QStyle::PM_MessageBoxIconSize, nullptr, &box)));
+        const QString notices = thirdPartyNoticesPath();
+        QPushButton *licenses = notices.isEmpty() ? nullptr : box.addButton(tr("&Licenses…"), QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Ok);
+        box.exec();
+        if (!licenses || box.clickedButton() != licenses)
+            return;
+        QFile file(notices);
+        if (!file.open(QIODevice::ReadOnly))
+            return;
+        QDialog dlg(this);
+        dlg.setWindowTitle(tr("Third-Party Licenses"));
+        auto *layout = new QVBoxLayout(&dlg);
+        auto *text = new QPlainTextEdit(QString::fromUtf8(file.readAll()));
+        text->setReadOnly(true);
+        text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        text->setMinimumSize(text->fontMetrics().horizontalAdvance(QLatin1Char('x')) * 90,
+                             text->fontMetrics().lineSpacing() * 30);
+        layout->addWidget(text);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        layout->addWidget(buttons);
+        dlg.exec();
     }, false);
     addAction(help, tr("About &Qt"), {}, [] { QApplication::aboutQt(); }, false);
 
