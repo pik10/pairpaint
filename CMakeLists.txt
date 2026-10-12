@@ -21,6 +21,7 @@ qt_add_library(pairpaint_core STATIC
     src/Adjustments.cpp src/Adjustments.h
     src/Autosave.cpp src/Autosave.h
     src/Blending.cpp src/Blending.h
+    src/BrushTool.cpp src/BrushTool.h
     src/Canvas.cpp src/Canvas.h
     src/ColorWidgets.cpp src/ColorWidgets.h
     src/Dialogs.cpp src/Dialogs.h
@@ -34,6 +35,7 @@ qt_add_library(pairpaint_core STATIC
     src/MainWindow.cpp src/MainWindow.h
     src/Psd.cpp src/Psd.h
     src/TextBox.cpp src/TextBox.h
+    src/ToolHelpers.h
     src/Tools.cpp src/Tools.h
     src/ToolSettings.h
 )
