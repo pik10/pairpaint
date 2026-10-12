@@ -1208,6 +1208,31 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
         settings->tolerance = 32;
         tools->setCurrent(Tool::Brush);
     }
+
+    // --- Alt-click or Ctrl-click picks the foreground color with the tools that paint with it.
+    {
+        QImage img(100, 60, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(10, 120, 200));
+        QPainter p(&img);
+        p.fillRect(50, 0, 50, 60, QColor(240, 200, 20));
+        p.end();
+        Canvas *c = newDoc(img);
+        Document *d = c->document();
+        const int steps = d->undoStack()->count();
+        for (Tool::Id id : {Tool::Brush, Tool::ColorReplacement, Tool::Fill, Tool::Gradient, Tool::RectShape}) {
+            settings->resetColors();
+            tools->setCurrent(id);
+            drag(c, {20, 30}, {20, 30}, Qt::AltModifier);
+            CHECK(settings->foreground() == QColor(10, 120, 200));
+            drag(c, {80, 30}, {80, 30}, Qt::ControlModifier);
+            CHECK(settings->foreground() == QColor(240, 200, 20));
+        }
+        CHECK(d->undoStack()->count() == steps && px(d, 20, 30) == QColor(10, 120, 200));  // nothing painted
+        tools->setCurrent(Tool::Brush);
+        drag(c, {20, 30}, {30, 30});                                                       // paints with the picked color
+        CHECK(px(d, 25, 30) == QColor(240, 200, 20));
+        settings->resetColors();
+    }
 }
 
 

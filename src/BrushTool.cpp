@@ -48,6 +48,8 @@ public:
     // A click that may start a stroke. False when it does something else instead (setting a clone
     // source) or the stroke can't start; the effect tells the user why.
     virtual bool press(Stroke &, const ToolEvent &, Canvas *) { return true; }
+    // Whether the tool paints with the foreground color, so Alt/Ctrl-click picks it.
+    virtual bool picksColor() const { return false; }
     // Whether Shift-click draws a straight line from the end of the last stroke.
     virtual bool drawsLines() const { return true; }
     // Whether the stroke collects its dabs in Stroke::buffer.
@@ -144,6 +146,7 @@ protected:
 class PaintEffect : public BrushEffect {
 public:
     Tool::Id id() const override { return Tool::Brush; }
+    bool picksColor() const override { return true; }
 
 protected:
     QColor dabColor(const Stroke &s) const override { return s.settings->foreground(); }
@@ -284,6 +287,7 @@ protected:
 class ColorReplaceEffect : public ColorMatchEffect {
 public:
     Tool::Id id() const override { return Tool::ColorReplacement; }
+    bool picksColor() const override { return true; }
     void show(Stroke &s, const QRect &r) override
     {
         static constexpr QPainter::CompositionMode modes[] = {Blend::Color, Blend::Hue, Blend::Saturation, Blend::Luminosity};
@@ -630,6 +634,8 @@ public:
         if (e.button != Qt::LeftButton)
             return;
         m_stroke.doc = m_doc;
+        if (m_effect->picksColor() && pickForeground(e, m_doc, m_settings))
+            return;
         if (!m_effect->press(m_stroke, e, m_canvas))
             return;
         m_doc->prepareForPixelEdit();

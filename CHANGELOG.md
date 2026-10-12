@@ -14,6 +14,8 @@ Everyday photo fixes, all working directly on the photo:
   while keeping its shading, e.g. a red shirt becomes blue. Like the Background Eraser, it only
   changes the color under the + (Sampling, Tolerance, Contiguous); Mode can also change just
   the hue, saturation or luminosity.
+- **Alt-click or Ctrl-click picks a color** from the image with the Brush, Color Replacement,
+  Paint Bucket, Gradient, Line, Rectangle and Ellipse tools, without switching to the Eyedropper.
 
 ## 0.8.0 — 2026-10-11
 

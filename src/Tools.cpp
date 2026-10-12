@@ -152,7 +152,7 @@ public:
 
     void press(const ToolEvent &e) override
     {
-        if (e.button != Qt::LeftButton)
+        if (e.button != Qt::LeftButton || pickForeground(e, m_doc, m_settings))
             return;
         m_edit.begin(m_doc);
         m_start = m_end = e.pos;
@@ -221,7 +221,7 @@ public:
 
     void press(const ToolEvent &e) override
     {
-        if (e.button != Qt::LeftButton)
+        if (e.button != Qt::LeftButton || pickForeground(e, m_doc, m_settings))
             return;
         m_edit.begin(m_doc);
         m_start = m_end = e.pos;
@@ -493,7 +493,7 @@ public:
     void press(const ToolEvent &e) override
     {
         const QPoint pt = pixelAt(e.pos);
-        if (e.button != Qt::LeftButton || !m_doc->rect().contains(pt))
+        if (e.button != Qt::LeftButton || !m_doc->rect().contains(pt) || pickForeground(e, m_doc, m_settings))
             return;
         if (m_doc->hasSelection() && m_doc->selection().constScanLine(pt.y())[pt.x()] == 0)
             return;  // clicked outside the selection
@@ -626,13 +626,9 @@ public:
 private:
     void pick(const ToolEvent &e, Qt::MouseButton button)
     {
-        const QPoint pt = pixelAt(e.pos);
-        if (!m_doc->rect().contains(pt) || button == Qt::NoButton)
+        const QColor c = colorAt(m_doc, e.pos);
+        if (!c.isValid() || button == Qt::NoButton)
             return;
-        QColor c = m_doc->composite(QRect(pt, QSize(1, 1))).pixelColor(0, 0);
-        if (c.alpha() == 0)
-            return;
-        c.setAlpha(255);
         if (button == Qt::RightButton || (e.modifiers & Qt::AltModifier))
             m_settings->setBackground(c);
         else
@@ -1708,23 +1704,25 @@ QString Tool::hint(Id id)
     case Sharpen: return QObject::tr("Paint to sharpen details");
     case Sponge: return QObject::tr("Paint to remove (or add) color saturation");
     case Eyedropper: return QObject::tr("Click: foreground color · Right-click or Alt-click: background color");
-    case Brush:
+    case Brush: return QObject::tr("Shift-click draws a straight line from the last stroke · Alt-click or Ctrl-click "
+                                   "picks a color · [ ] change size");
     case Eraser: return QObject::tr("Shift-click draws a straight line from the last stroke · [ ] change size");
     case BackgroundEraser: return QObject::tr("Drag along an object's edge, with the + over the background: "
                                               "that color is erased, the object stays");
     case CloneStamp: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint to copy it");
     case Healing: return QObject::tr("Alt-click or Ctrl-click sets the source, then paint over blemishes");
     case ColorReplacement: return QObject::tr("Paint over an object with the + on it: its color becomes the foreground "
-                                              "color, keeping its shading");
+                                              "color, keeping its shading · Alt-click or Ctrl-click picks a color");
     case RedEye: return QObject::tr("Click on a red pupil, or drag a box around the eye");
     case Smudge: return QObject::tr("Drag to smear colors, like a finger through wet paint");
     case Dodge: return QObject::tr("Paint to lighten the chosen tonal range");
     case Burn: return QObject::tr("Paint to darken the chosen tonal range");
-    case Fill: return QObject::tr("Fills similar colored area with the foreground color");
-    case Gradient: return QObject::tr("Drag to draw a foreground → background gradient. Shift snaps to 45°.");
+    case Fill: return QObject::tr("Fills similar colored area with the foreground color · Alt-click or Ctrl-click picks a color");
+    case Gradient: return QObject::tr("Drag to draw a foreground → background gradient. Shift snaps to 45°. "
+                                      "Alt-click or Ctrl-click picks the foreground color.");
     case LineShape:
     case RectShape:
-    case EllipseShape: return QObject::tr("Drag to draw. Shift constrains proportions / angle.");
+    case EllipseShape: return QObject::tr("Drag to draw. Shift constrains proportions / angle. Alt-click or Ctrl-click picks a color.");
     case Text: return QObject::tr("Click to type on the image · click text to edit it · Esc or click elsewhere to finish");
     case Hand: return QObject::tr("Drag to pan. Hold Space with any tool to pan temporarily.");
     case Zoom: return QObject::tr("Click to zoom in · Right-click or Alt-click to zoom out · Ctrl+wheel zooms");
