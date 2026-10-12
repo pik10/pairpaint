@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-10-12
 
 ### New
 Everyday photo fixes, all working directly on the photo:

@@ -51,6 +51,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.9.0" date="2026-10-12">
+      <description>
+        <p>Everyday photo fixes: Shadows/Highlights, Reduce Noise, a Red Eye tool and a Color Replacement brush. Alt-click or Ctrl-click picks a color with the painting tools.</p>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-10-11">
       <description>
         <p>Cutting objects out: a new Background Eraser erases the background color around an object's edge and leaves the object, and Layer &gt; Matting &gt; Decontaminate Colors removes the old background's tint from soft edges.</p>
