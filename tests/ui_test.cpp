@@ -1247,6 +1247,41 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
     }
 }
 
+// Quick Selection: painting over a disc selects the disc up to its edge, not the background.
+static void testQuickSelect(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    QImage img(300, 200, QImage::Format_ARGB32_Premultiplied);
+    QRandomGenerator rng(3);
+    for (int y = 0; y < 200; ++y)
+        for (int x = 0; x < 300; ++x) {
+            const int n = int(rng.bounded(16));
+            const bool disc = QLineF(x, y, 100, 100).length() < 50;
+            const bool square = x >= 200 && x < 260 && y >= 70 && y < 130;
+            img.setPixel(x, y, disc ? qRgb(200 + n, 40 + n, 40) : square ? qRgb(40, 60 + n, 200) : qRgb(225 + n, 225 + n, 215 + n));
+        }
+    w.addDocument(new Document(img));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    auto selected = [&](int x, int y) { return d->hasSelection() && d->selection().constScanLine(y)[x] > 127; };
+
+    CHECK(action(&w, "Quick Selection"));
+    tools->setCurrent(Tool::QuickSelect);
+    settings->size = 16;
+    drag(c, {90, 90}, {110, 110});
+    CHECK(selected(100, 100) && selected(100, 55) && selected(55, 100) && selected(140, 120));  // the whole disc
+    CHECK(!selected(100, 45) && !selected(160, 100) && !selected(10, 10) && !selected(230, 100));
+    CHECK(d->undoStack()->undoText() == "Quick Selection");
+
+    drag(c, {220, 90}, {240, 110});  // painting again adds the square
+    CHECK(selected(100, 100) && selected(205, 75) && selected(255, 125) && !selected(190, 100));
+    drag(c, {225, 100}, {235, 100}, Qt::AltModifier);  // Alt subtracts it again
+    CHECK(selected(100, 100) && !selected(230, 100));
+    d->undoStack()->undo();
+    CHECK(selected(230, 100));
+    d->deselect();
+}
+
 // Remove tool and Content-Aware Fill: a pole in front of sky and grass disappears into them.
 static void testRemove(MainWindow &w, ToolManager *tools, ToolSettings *settings)
 {
@@ -2719,6 +2754,7 @@ int main(int argc, char **argv) {
     testReviewFixes0_9(w, tools, settings);
     testAboutBox(w);
     testRemove(w, tools, settings);
+    testQuickSelect(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

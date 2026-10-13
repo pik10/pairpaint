@@ -47,7 +47,7 @@ You can also [build from source](#building).
   (select, copy/paste, multiple lines); font, size, color, bold/italic apply live; text layers stay
   editable when moved, and become pixels only when painted on
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Polygonal
-  Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Color Replacement, Eraser, Background Eraser, Clone Stamp, Spot Healing
+  Lasso, Magic Wand, Quick Selection (paint over an object and the selection spreads to its edges), Crop (aspect ratios, straighten), Eyedropper, Brush, Color Replacement, Eraser, Background Eraser, Clone Stamp, Spot Healing
   Brush, Remove (paint over an object and its surroundings fill the area), Healing Brush, Red Eye, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
 - **Content-Aware Fill** (Edit menu): fills a selection from its surroundings, like the Remove tool
@@ -99,7 +99,7 @@ cmake --build build -j
 | Move / Free Transform | V / Ctrl+T | | Swap / reset colors | X / D |
 | Rect / Ellipse marquee | M / Shift+M | | Brush size | [ / ] |
 | Lasso / Polygonal Lasso | L / Shift+L | | Pan (temporary) | hold Space |
-| Magic Wand | W | | Zoom | Ctrl+wheel, Ctrl +/-, Ctrl+0 fit, Ctrl+1 100% |
+| Magic Wand / Quick Selection | W / Shift+W | | Zoom | Ctrl+wheel, Ctrl +/-, Ctrl+0 fit, Ctrl+1 100% |
 | Crop | C | | Select all / deselect / inverse | Ctrl+A / Ctrl+D / Ctrl+Shift+I |
 | Eyedropper | I | | New layer / duplicate / merge | Ctrl+Shift+N / Ctrl+J / Ctrl+E |
 | Brush / Eraser | B / E | | Fill fg / bg | Alt+Backspace / Ctrl+Backspace |

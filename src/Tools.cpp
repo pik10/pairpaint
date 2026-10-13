@@ -13,6 +13,7 @@
 #include "ToolSettings.h"
 
 #include <QClipboard>
+#include <QElapsedTimer>
 #include <QCursor>
 #include <QFontMetricsF>
 #include <QGuiApplication>
@@ -483,6 +484,96 @@ public:
         const QImage mask = Filters::floodMask(sample, pt, m_settings->tolerance, m_settings->contiguous);
         m_doc->selectMask(mask, selectionOp(e.modifiers), name(MagicWand));
     }
+};
+
+// Quick Selection: paint over an object and the selection spreads from the brush to the object's
+// edges, updating as you paint. Once there is a selection, painting adds to it; Alt or Ctrl
+// subtracts. One undo step per stroke.
+class QuickSelectTool : public Tool {
+public:
+    using Tool::Tool;
+    Id id() const override { return QuickSelect; }
+    bool showsBrushOutline() const override { return true; }
+
+    void press(const ToolEvent &e) override
+    {
+        if (e.button != Qt::LeftButton)
+            return;
+        m_op = selectionOp(e.modifiers);
+        if (m_op == SelectionOp::Intersect || (m_op == SelectionOp::Replace && m_doc->hasSelection()))
+            m_op = SelectionOp::Add;
+        const Layer &layer = m_doc->activeLayer();
+        const bool merged = m_settings->sampleMerged || layer.isAdjustment() || layer.isGroup();
+        m_sample = merged ? m_doc->flattened() : layer.image;
+        m_original = m_doc->selection();
+        m_painted = QImage(m_doc->size(), QImage::Format_Alpha8);
+        m_painted.fill(0);
+        m_drag = true;
+        m_last = e.pos;
+        paint(e.pos);
+        preview();
+    }
+
+    void move(const ToolEvent &e) override
+    {
+        if (!m_drag)
+            return;
+        paint(e.pos);
+        if (m_since.elapsed() >= 50)  // keep up with the pointer on large images
+            preview();
+    }
+
+    void release(const ToolEvent &e) override
+    {
+        if (e.button != Qt::LeftButton || !m_drag)
+            return;
+        paint(e.pos);
+        m_drag = false;
+        const QImage shape = Filters::quickSelect(m_sample, m_painted, m_settings->size / 2.0);
+        m_doc->setSelection(m_original);  // so the undo step starts from it
+        m_doc->selectMask(shape, m_op, name(QuickSelect));
+        m_sample = m_painted = m_original = QImage();
+    }
+
+    void cancel() override
+    {
+        if (!m_drag)
+            return;
+        m_drag = false;
+        m_doc->setSelection(m_original);
+        m_sample = m_painted = m_original = QImage();
+    }
+
+private:
+    // Adds the brush's path from the last position to `to` to the painted pixels.
+    void paint(const QPointF &to)
+    {
+        QPainter p(&m_painted);
+        p.setRenderHint(QPainter::Antialiasing);
+        const qreal r = std::max<qreal>(0.5, m_settings->size / 2.0);
+        if (to == m_last) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(Qt::black);
+            p.drawEllipse(to, r, r);
+        } else {
+            p.setPen(QPen(Qt::black, 2 * r, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(m_last, to);
+        }
+        m_last = to;
+    }
+
+    void preview()
+    {
+        const QImage shape = Filters::quickSelect(m_sample, m_painted, m_settings->size / 2.0);
+        m_doc->setSelection(Document::combinedSelection(m_original, shape, m_op));
+        m_since.restart();
+    }
+
+    bool m_drag = false;
+    SelectionOp m_op = SelectionOp::Add;
+    QImage m_sample, m_painted, m_original;
+    QPointF m_last;
+    QElapsedTimer m_since;
 };
 
 class FillTool : public Tool {
@@ -1618,6 +1709,7 @@ std::unique_ptr<Tool> createTool(Tool::Id id, ToolSettings *s)
     case Tool::EllipseSelect:
     case Tool::Lasso: return std::make_unique<SelectTool>(s, id);
     case Tool::MagicWand: return std::make_unique<MagicWandTool>(s);
+    case Tool::QuickSelect: return std::make_unique<QuickSelectTool>(s);
     case Tool::Crop: return std::make_unique<CropTool>(s);
     case Tool::Eyedropper: return std::make_unique<EyedropperTool>(s);
     case Tool::RedEye: return std::make_unique<RedEyeTool>(s);
@@ -1646,6 +1738,7 @@ QString Tool::name(Id id)
     case Lasso: return QObject::tr("Lasso");
     case PolyLasso: return QObject::tr("Polygonal Lasso");
     case MagicWand: return QObject::tr("Magic Wand");
+    case QuickSelect: return QObject::tr("Quick Selection");
     case Crop: return QObject::tr("Crop");
     case Eyedropper: return QObject::tr("Eyedropper");
     case Brush: return QObject::tr("Brush");
@@ -1678,7 +1771,7 @@ QString Tool::name(Id id)
 
 QString Tool::shortcut(Id id)
 {
-    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "Shift+B", "E", "Shift+E", "S",
+    static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "Shift+W", "C", "I", "B", "Shift+B", "E", "Shift+E", "S",
                                       "J", "", "Shift+J", "", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
                                       "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
@@ -1693,6 +1786,8 @@ QString Tool::hint(Id id)
     case EllipseSelect:
     case Lasso:
     case MagicWand: return QObject::tr("Shift: add · Alt/Ctrl: subtract · Shift+Alt: intersect · click to deselect");
+    case QuickSelect: return QObject::tr("Paint over an object: the selection spreads to its edges · paint more to add · "
+                                         "Alt/Ctrl: subtract · [ ] change size");
     case Crop: return QObject::tr("Drag a frame · drag inside to move, outside to straighten · Enter crops, Esc cancels");
     case PolyLasso: return QObject::tr("Click corner points · double-click or click the first point to close · Backspace undoes a point");
     case SpotHealing: return QObject::tr("Paint over spots and blemishes; a matching patch nearby replaces them");

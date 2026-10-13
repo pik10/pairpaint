@@ -35,6 +35,7 @@ qt_add_library(pairpaint_core STATIC
     src/LayersPanel.cpp src/LayersPanel.h
     src/MainWindow.cpp src/MainWindow.h
     src/Psd.cpp src/Psd.h
+    src/Segment.cpp
     src/TextBox.cpp src/TextBox.h
     src/ToolHelpers.h
     src/Tools.cpp src/Tools.h

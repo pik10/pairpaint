@@ -79,6 +79,11 @@ QImage fillFromSurroundings(const QImage &src, const QImage &hole);
 // pixels for `*area`, the part of the image that changed (empty when nothing is covered).
 QImage contentAwareFill(const QImage &image, const QImage &coverage, QRect *area);
 
+// Quick Selection: the area that the pixels set in `painted` (Alpha8, the size of `image`) belong
+// to: grown from them over pixels of like colors, up to the edges, within a reach of a few
+// hundred pixels (more for a large `radius`, the brush's). Returns an Alpha8 mask.
+QImage quickSelect(const QImage &image, const QImage &painted, double radius);
+
 // Pixels connected to (or, if !contiguous, anywhere matching) the seed color
 // within `tolerance` (0..255 per channel). Returns a Format_Alpha8 mask.
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous);

@@ -88,6 +88,7 @@ QList<int> optionsForTool(int id)
     case T::Burn: return {Size, Hardness, Range, Opacity, Smoothing, Pressure};
     case T::Fill: return {Tolerance, Contiguous, SampleMerged, Opacity};
     case T::MagicWand: return {Tolerance, Contiguous, SampleMerged};
+    case T::QuickSelect: return {Size, SampleMerged};
     case T::Gradient: return {Opacity, Radial};
     case T::LineShape: return {Size, Opacity, Antialias};
     case T::RectShape:

@@ -668,24 +668,26 @@ void Document::setSelection(const QImage &mask)
     emit selectionChanged();
 }
 
+QImage Document::combinedSelection(const QImage &current, const QImage &shape, SelectionOp op)
+{
+    if (op == SelectionOp::Replace || (op == SelectionOp::Add && current.isNull()))
+        return shape;
+    if (current.isNull())
+        return {};  // subtracting from / intersecting with nothing
+    QImage result = current.copy();
+    QPainter p(&result);
+    if (op == SelectionOp::Subtract)
+        p.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+    else if (op == SelectionOp::Intersect)
+        p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    p.drawImage(0, 0, shape);
+    return result;
+}
+
 void Document::selectMask(const QImage &shape, SelectionOp op, const QString &text)
 {
     const DocState before = m_state;
-    QImage result;
-    if (op == SelectionOp::Replace || (op == SelectionOp::Add && !hasSelection())) {
-        result = shape;
-    } else if (!hasSelection()) {
-        result = QImage();  // subtracting from / intersecting with nothing
-    } else {
-        result = m_state.selection.copy();
-        QPainter p(&result);
-        if (op == SelectionOp::Subtract)
-            p.setCompositionMode(QPainter::CompositionMode_DestinationOut);
-        else if (op == SelectionOp::Intersect)
-            p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-        p.drawImage(0, 0, shape);
-    }
-    m_state.selection = result;
+    m_state.selection = combinedSelection(m_state.selection, shape, op);
     finish(text, before, Selection);
 }
 

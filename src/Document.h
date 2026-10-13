@@ -157,6 +157,8 @@ public:
     QRect selectionBounds() const { return m_selectionBounds; }
     void setSelection(const QImage &mask);  // not undoable; used for live previews
     void selectMask(const QImage &shape, SelectionOp op, const QString &text);
+    // The selection `current` (null: none) combined with `shape` by `op`, as selectMask does.
+    static QImage combinedSelection(const QImage &current, const QImage &shape, SelectionOp op);
     void selectPath(const QPainterPath &path, SelectionOp op, bool antialias, const QString &text);
     void selectAll();
     void deselect();

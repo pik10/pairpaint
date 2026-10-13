@@ -166,6 +166,18 @@ QIcon toolIcon(Tool::Id id)
         p.drawLine(39, 11, 53, 25);
         p.drawLine(53, 11, 39, 25);
         break;
+    case Tool::QuickSelect:
+        // A brush whose stroke leaves a selection (dashed outline) behind.
+        p.save();
+        p.setPen(dashed);
+        p.drawEllipse(QPointF(24, 40), 18, 15);
+        p.restore();
+        p.setPen(QPen(ink, 6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(30, 34, 54, 10);
+        p.setBrush(ink);
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(QPointF(28, 37), 6, 6);
+        break;
     case Tool::Crop:
         p.drawPolyline(QPolygon({QPoint(18, 6), QPoint(18, 46), QPoint(58, 46)}));
         p.drawPolyline(QPolygon({QPoint(6, 18), QPoint(46, 18), QPoint(46, 58)}));
