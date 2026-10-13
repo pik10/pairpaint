@@ -1654,6 +1654,7 @@ QString Tool::name(Id id)
     case BackgroundEraser: return QObject::tr("Background Eraser");
     case CloneStamp: return QObject::tr("Clone Stamp");
     case SpotHealing: return QObject::tr("Spot Healing Brush");
+    case Remove: return QObject::tr("Remove");
     case Healing: return QObject::tr("Healing Brush");
     case RedEye: return QObject::tr("Red Eye");
     case Smudge: return QObject::tr("Smudge");
@@ -1678,7 +1679,7 @@ QString Tool::name(Id id)
 QString Tool::shortcut(Id id)
 {
     static const char *keys[Count] = {"V", "Ctrl+T", "M", "Shift+M", "L", "Shift+L", "W", "C", "I", "B", "Shift+B", "E", "Shift+E", "S",
-                                      "J", "Shift+J", "", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
+                                      "J", "", "Shift+J", "", "R", "Shift+R", "", "O", "Shift+O", "", "K", "G", "N", "U",
                                       "Shift+U", "T", "H", "Z"};
     return QString::fromLatin1(keys[id]);
 }
@@ -1695,6 +1696,7 @@ QString Tool::hint(Id id)
     case Crop: return QObject::tr("Drag a frame · drag inside to move, outside to straighten · Enter crops, Esc cancels");
     case PolyLasso: return QObject::tr("Click corner points · double-click or click the first point to close · Backspace undoes a point");
     case SpotHealing: return QObject::tr("Paint over spots and blemishes; a matching patch nearby replaces them");
+    case Remove: return QObject::tr("Paint over an object to remove it: its surroundings fill the area");
     case Blur: return QObject::tr("Paint to soften details");
     case Sharpen: return QObject::tr("Paint to sharpen details");
     case Sponge: return QObject::tr("Paint to remove (or add) color saturation");
@@ -1745,7 +1747,7 @@ bool Tool::editsPixels(Id id)
 {
     switch (id) {
     case Transform: case Brush: case ColorReplacement: case Eraser: case BackgroundEraser: case CloneStamp:
-    case SpotHealing: case Healing: case RedEye: case Smudge:
+    case SpotHealing: case Remove: case Healing: case RedEye: case Smudge:
     case Blur: case Sharpen: case Dodge: case Burn: case Sponge:
     case Fill: case Gradient: case LineShape: case RectShape: case EllipseShape:
         return true;

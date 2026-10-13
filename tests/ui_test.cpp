@@ -1247,6 +1247,69 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
     }
 }
 
+// Remove tool and Content-Aware Fill: a pole in front of sky and grass disappears into them.
+static void testRemove(MainWindow &w, ToolManager *tools, ToolSettings *settings)
+{
+    QImage img(240, 160, QImage::Format_ARGB32_Premultiplied);
+    QRandomGenerator rng(7);
+    for (int y = 0; y < 160; ++y)
+        for (int x = 0; x < 240; ++x) {
+            const int n = int(rng.bounded(30));
+            img.setPixel(x, y, y < 80 ? qRgb(120 + n / 3, 170 + n / 3, 230) : qRgb(40 + n, 120 + n, 30 + n / 2));
+        }
+    QPainter p(&img);
+    p.fillRect(114, 20, 12, 120, QColor(20, 15, 10));  // the pole
+    p.end();
+    w.addDocument(new Document(img));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    auto darkPixels = [&] {
+        int dark = 0;
+        for (int y = 15; y < 145; ++y)
+            for (int x = 105; x < 135; ++x)
+                dark += qGray(d->layer(0).image.pixel(x, y)) < 60;
+        return dark;
+    };
+    CHECK(darkPixels() > 1000);
+
+    CHECK(action(&w, "Remove"));
+    tools->setCurrent(Tool::Remove);
+    settings->size = 24;
+    drag(c, {120, 12}, {120, 148});
+    CHECK(darkPixels() == 0);
+    const QColor sky = d->layer(0).image.pixelColor(120, 40), grass = d->layer(0).image.pixelColor(120, 120);
+    CHECK(sky.blue() > 200 && grass.green() > grass.red() && grass.green() > grass.blue());
+    CHECK(d->layer(0).image.pixel(30, 30) == img.pixel(30, 30));  // the rest is untouched
+    CHECK(d->undoStack()->undoText() == "Remove");
+    d->undoStack()->undo();
+    CHECK(darkPixels() > 1000);
+
+    // Content-Aware Fill needs a selection; then fills it the same way.
+    QAction *fill = action(&w, "Content-Aware Fill");
+    CHECK(fill);
+    if (fill) {
+        fill->trigger();
+        CHECK(darkPixels() > 1000);  // no selection: nothing happens
+        QPainterPath around;
+        around.addRect(108, 14, 24, 132);
+        d->selectPath(around, SelectionOp::Replace, false, "Select");
+        fill->trigger();
+        CHECK(darkPixels() == 0);
+        CHECK(d->undoStack()->undoText() == "Content-Aware Fill");
+    }
+
+    // The fill copes with nothing to fill and with nothing to fill from.
+    QImage none(20, 20, QImage::Format_Alpha8);
+    none.fill(0);
+    CHECK(Filters::fillFromSurroundings(img.copy(0, 0, 20, 20), none) == img.copy(0, 0, 20, 20));
+    none.fill(255);
+    CHECK(Filters::fillFromSurroundings(img.copy(0, 0, 20, 20), none) == img.copy(0, 0, 20, 20));
+    QRect area;
+    none.fill(0);
+    CHECK(Filters::contentAwareFill(img.copy(0, 0, 20, 20), none, &area).isNull() && area.isEmpty());
+}
+
 // The About box offers the licenses of the bundled libraries when a release put them next to the program.
 static void testAboutBox(MainWindow &w)
 {
@@ -2655,6 +2718,7 @@ int main(int argc, char **argv) {
     testEverydayFixes(w, tools, settings);
     testReviewFixes0_9(w, tools, settings);
     testAboutBox(w);
+    testRemove(w, tools, settings);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

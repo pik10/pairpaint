@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Remove tool**: paint over an unwanted object (a person, a sign, a power line) and, when you
+  let go, the area is filled from its surroundings so the object disappears.
+- **Edit > Content-Aware Fill** (Shift+Backspace) does the same for a selection.
+
 ## 0.9.2 — 2026-10-12
 
 ### Changed

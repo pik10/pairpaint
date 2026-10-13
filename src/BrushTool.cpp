@@ -10,6 +10,7 @@
 #include "ToolHelpers.h"
 #include "ToolSettings.h"
 
+#include <QGuiApplication>
 #include <QLineF>
 #include <QPainter>
 #include <algorithm>
@@ -542,6 +543,44 @@ private:
     }
 };
 
+// Remove: paint over an object; when the stroke ends, the painted area is filled from its
+// surroundings, as if the object had never been there.
+class RemoveEffect : public BrushEffect {
+public:
+    Tool::Id id() const override { return Tool::Remove; }
+
+    void show(Stroke &s, const QRect &r) override
+    {
+        if (s.active)  // while painting, the area to remove shows in see-through pink
+            apply(s, r, strokeIn(s, r), 0.5);
+    }
+
+    void finish(Stroke &s) override
+    {
+        if (s.rect.isEmpty())
+            return;
+        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+        QImage coverage(s.doc->size(), QImage::Format_Alpha8);
+        coverage.fill(0);
+        QPainter cp(&coverage);
+        cp.drawImage(s.rect.topLeft(), strokeIn(s, s.rect));
+        cp.end();
+        QRect area;
+        const QImage filled = Filters::contentAwareFill(s.base, coverage, &area);
+        QPainter p(&s.doc->targetImage());
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        p.drawImage(s.rect.topLeft(), s.base, s.rect);  // without the pink
+        if (!area.isEmpty())
+            p.drawImage(area.topLeft(), filled);
+        p.end();
+        s.doc->notifyImageChanged(s.rect | area);
+        QGuiApplication::restoreOverrideCursor();
+    }
+
+protected:
+    QColor dabColor(const Stroke &) const override { return QColor(255, 40, 120); }
+};
+
 // Smudge: blends the paint picked up so far into the layer under the dab, then picks up some of
 // the result. Works on the layer directly, without a stroke buffer.
 class SmudgeEffect : public BrushEffect {
@@ -780,6 +819,7 @@ std::unique_ptr<Tool> createBrushTool(Tool::Id id, ToolSettings *settings)
     case Tool::CloneStamp: effect = std::make_unique<CloneEffect>(false); break;
     case Tool::Healing: effect = std::make_unique<CloneEffect>(true); break;
     case Tool::SpotHealing: effect = std::make_unique<SpotHealEffect>(); break;
+    case Tool::Remove: effect = std::make_unique<RemoveEffect>(); break;
     case Tool::Smudge: effect = std::make_unique<SmudgeEffect>(); break;
     case Tool::Blur:
     case Tool::Sharpen:

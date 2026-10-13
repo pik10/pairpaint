@@ -69,6 +69,16 @@ std::array<QList<int>, 3> channelHistograms(const QImage &src);
 // lighting of `dest` around the stroke. `mask` (Alpha8) is the stroke coverage.
 QImage heal(const QImage &source, const QImage &dest, const QImage &mask, double sigma);
 
+// Content-aware fill: replaces the pixels where `hole` (Alpha8, the size of `src`) is set with
+// texture and structure from the rest of `src`, so what was there disappears into its
+// surroundings. Pass a region around the hole, two or three times its size: the fill is taken
+// from all of it.
+QImage fillFromSurroundings(const QImage &src, const QImage &hole);
+// The Remove tool and Content-Aware Fill: fills the pixels covered by `coverage` (Alpha8, the
+// size of `image`) from the area around them, blending partly covered pixels. Returns the new
+// pixels for `*area`, the part of the image that changed (empty when nothing is covered).
+QImage contentAwareFill(const QImage &image, const QImage &coverage, QRect *area);
+
 // Pixels connected to (or, if !contiguous, anywhere matching) the seed color
 // within `tolerance` (0..255 per channel). Returns a Format_Alpha8 mask.
 QImage floodMask(const QImage &src, const QPoint &seed, int tolerance, bool contiguous);

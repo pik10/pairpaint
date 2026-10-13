@@ -1517,6 +1517,23 @@ void Document::fillSelected(const QColor &color)
     finish(tr("Fill"), before, Pixels | Structure);
 }
 
+void Document::fillSelectedFromSurroundings()
+{
+    if (!hasSelection())
+        return;
+    prepareForPixelEdit();
+    const DocState before = m_state;
+    QRect area;
+    const QImage filled = Filters::contentAwareFill(targetImage(), m_state.selection, &area);
+    if (area.isEmpty())
+        return;
+    QPainter p(&targetImage());
+    p.setCompositionMode(QPainter::CompositionMode_Source);
+    p.drawImage(area.topLeft(), filled);
+    p.end();
+    finish(tr("Content-Aware Fill"), before, Pixels | Structure);
+}
+
 QImage Document::copySelected(bool merged) const
 {
     QImage src = merged ? flattened() : targetImage();

@@ -105,6 +105,16 @@ QIcon toolIcon(Tool::Id id)
         p.drawLine(52, 6, 52, 20);
         p.drawLine(45, 13, 59, 13);
         break;
+    case Tool::Remove:
+        // An object (dashed) wiped away by a brush stroke, with a sparkle.
+        p.setPen(dashed);
+        p.drawRect(QRectF(8, 24, 32, 32));
+        p.setPen(QPen(ink, 10, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(14, 50, 40, 24);
+        p.setPen(QPen(ink, 3.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(50, 4, 50, 22);
+        p.drawLine(41, 13, 59, 13);
+        break;
     case Tool::Blur: {
         // A water drop.
         QPainterPath drop(QPointF(32, 6));

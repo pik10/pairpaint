@@ -31,6 +31,7 @@ qt_add_library(pairpaint_core STATIC
     src/Filters.cpp src/Filters.h
     src/Heif.cpp src/Heif.h
     src/Icons.cpp src/Icons.h
+    src/Inpaint.cpp
     src/LayersPanel.cpp src/LayersPanel.h
     src/MainWindow.cpp src/MainWindow.h
     src/Psd.cpp src/Psd.h

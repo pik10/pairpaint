@@ -8,5 +8,5 @@
 #include <memory>
 
 // The brush tools: Brush, Color Replacement, Eraser, Background Eraser, Clone Stamp, Spot Healing Brush,
-// Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn and Sponge. Null for other tools.
+// Remove, Healing Brush, Smudge, Blur, Sharpen, Dodge, Burn and Sponge. Null for other tools.
 std::unique_ptr<Tool> createBrushTool(Tool::Id id, ToolSettings *settings);

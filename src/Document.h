@@ -226,6 +226,8 @@ public:
     void applyToActive(const QString &text, const std::function<QImage(const QImage &)> &f);
     void clearSelected();
     void fillSelected(const QColor &color);
+    // Content-Aware Fill: replaces the selected pixels with ones made from their surroundings.
+    void fillSelectedFromSurroundings();
     QImage copySelected(bool merged) const;
     void pasteImage(const QImage &image);
 

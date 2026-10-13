@@ -48,8 +48,9 @@ You can also [build from source](#building).
   editable when moved, and become pixels only when painted on
 - **Tools**: Move, Free Transform (scale/rotate/move), Rectangular/Elliptical Marquee, Lasso, Polygonal
   Lasso, Magic Wand, Crop (aspect ratios, straighten), Eyedropper, Brush, Color Replacement, Eraser, Background Eraser, Clone Stamp, Spot Healing
-  Brush, Healing Brush, Red Eye, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
+  Brush, Remove (paint over an object and its surroundings fill the area), Healing Brush, Red Eye, Smudge, Blur, Sharpen, Dodge, Burn, Sponge, Paint Bucket, Gradient (linear/radial),
   Line, Rectangle, Ellipse, Text, Hand, Zoom
+- **Content-Aware Fill** (Edit menu): fills a selection from its surroundings, like the Remove tool
 - **Pen tablets**: pressure controls brush size and/or opacity (Brush, Eraser, Clone, Healing)
 - **Brush smoothing**: steadies shaky strokes (all brush tools), like a string the brush follows
 - **Rulers, guides and snapping**: drag guides out of the rulers, move them with the Move tool or drop
@@ -108,6 +109,7 @@ cmake --build build -j
 | | | | Auto Tone / Contrast / Color | Ctrl+Shift+L / Ctrl+Alt+Shift+L / Ctrl+Shift+B |
 | | | | Color Balance | Ctrl+B |
 | | | | Feather selection | Shift+F6 |
+| | | | Content-Aware Fill | Shift+Backspace |
 | | | | Create / release clipping mask | Ctrl+Alt+G |
 | | | | Toggle editing mask / layer | Ctrl+\\ |
 | Paint Bucket / Gradient | K / G | | Hue/Sat, Invert, Desaturate | Ctrl+U, Ctrl+I, Ctrl+Shift+U |

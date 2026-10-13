@@ -80,6 +80,7 @@ QList<int> optionsForTool(int id)
     case T::Blur:
     case T::Sharpen: return {Size, Hardness, Opacity, Smoothing, Pressure};
     case T::SpotHealing: return {Size, Hardness, Smoothing, Pressure};
+    case T::Remove: return {Size, Smoothing, Pressure};
     case T::Sponge: return {Size, Hardness, Sponge, Opacity, Smoothing, Pressure};
     case T::Crop: return {CropRatio};
     case T::PolyLasso: return {Antialias};
@@ -301,6 +302,19 @@ void MainWindow::createMenus()
               [this] { withDoc([this](Document *d) { if (hasPixels(d)) d->fillSelected(m_settings->foreground()); }); });
     addAction(edit, tr("Fill with &Background"), QKeySequence("Ctrl+Backspace"),
               [this] { withDoc([this](Document *d) { if (hasPixels(d)) d->fillSelected(m_settings->background()); }); });
+    addAction(edit, tr("Content-&Aware Fill"), QKeySequence("Shift+Backspace"), [this] {
+        withDoc([this](Document *d) {
+            if (!hasPixels(d))
+                return;
+            if (!d->hasSelection()) {
+                statusBar()->showMessage(tr("Select the area to fill first, a little larger than the object to remove."), 5000);
+                return;
+            }
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            d->fillSelectedFromSurroundings();
+            QApplication::restoreOverrideCursor();
+        });
+    });
     edit->addSeparator();
     addAction(edit, tr("Free &Transform") + QStringLiteral("\tCtrl+T"), {}, [this] {
         m_tools->setCurrent(Tool::Transform);
