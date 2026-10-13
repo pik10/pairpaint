@@ -356,6 +356,27 @@ Document *load(const QString &path, QString *error, QString *warning)
     }
 }
 
+// Bits per color channel of an image as read from a file.
+static int bitsPerChannel(QImage::Format format)
+{
+    switch (format) {
+    case QImage::Format_RGBX64:
+    case QImage::Format_RGBA64:
+    case QImage::Format_RGBA64_Premultiplied:
+    case QImage::Format_Grayscale16:
+    case QImage::Format_RGBX16FPx4:
+    case QImage::Format_RGBA16FPx4:
+    case QImage::Format_RGBA16FPx4_Premultiplied:
+        return 16;
+    case QImage::Format_RGBX32FPx4:
+    case QImage::Format_RGBA32FPx4:
+    case QImage::Format_RGBA32FPx4_Premultiplied:
+        return 32;
+    default:
+        return 8;
+    }
+}
+
 Document *loadUnchecked(const QString &path, QString *error, QString *warning)
 {
     if (isProjectFile(path))
@@ -364,6 +385,7 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
         return Psd::read(path, error, warning);
 
     QImage img;
+    int bits = 8;
     if (Heif::hasDecoder() && Heif::isHeif(path)) {
         img = Heif::read(path, error);
         if (img.isNull())
@@ -383,6 +405,7 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
             *error = reader.errorString();
             return nullptr;
         }
+        bits = bitsPerChannel(img.format());
 #if defined(Q_OS_MACOS) && QT_VERSION < QT_VERSION_CHECK(6, 11, 0)
         // Before Qt 6.11, Qt's macOS HEIF plugin already converted the pixels to sRGB but still
         // labelled them with the photo's own color space; converting again would oversaturate
@@ -404,7 +427,9 @@ Document *loadUnchecked(const QString &path, QString *error, QString *warning)
         img = img.convertToFormat(QImage::Format_ARGB32);
         img.convertToColorSpace(QColorSpace::SRgb);
     }
-    return new Document(img);
+    auto *doc = new Document(img);
+    doc->setFileBitDepth(bits);
+    return doc;
 }
 
 bool saveProject(const Document *doc, const QString &path, QString *error)

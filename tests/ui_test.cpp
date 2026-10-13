@@ -1247,6 +1247,58 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
     }
 }
 
+// A 16-bit file: a note when it opens, and Save asks before making the original 8-bit.
+static void testHighBitDepth(MainWindow &w)
+{
+    const QString path = outputDir->filePath("deep.png");
+    QImage deep(40, 30, QImage::Format_RGBA64);
+    deep.fill(QColor::fromRgba64(30000, 40000, 50000));
+    CHECK(deep.save(path));
+    QString error;
+    std::unique_ptr<Document> loaded(FileIO::load(path, &error));
+    CHECK(loaded && loaded->fileBitDepth() == 16);
+    const QString flat = outputDir->filePath("flat.png");
+    CHECK(QImage(10, 10, QImage::Format_RGB32).save(flat));
+    loaded.reset(FileIO::load(flat, &error));
+    CHECK(loaded && loaded->fileBitDepth() == 8);
+
+    // Answers the next message box by clicking the button whose text contains `button`, and
+    // records its text.
+    QString shown;
+    auto answer = [&](const QString &button) {
+        shown.clear();
+        QTimer::singleShot(50, [&shown, button] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                shown = box->text();
+                for (QAbstractButton *b : box->buttons())
+                    if (b->text().remove('&').contains(button))
+                        b->click();
+            }
+        });
+    };
+    auto fileDepth = [&] {
+        std::unique_ptr<Document> d(FileIO::load(path, &error));
+        return d ? d->fileBitDepth() : 0;
+    };
+    answer("OK");
+    w.openFile(path);
+    CHECK(shown.contains("16 bits per color channel"));
+    QAction *save = action(&w, "Save");
+    CHECK(save);
+    if (!save)
+        return;
+    answer("Cancel");
+    save->trigger();
+    CHECK(shown.contains("deep.png has 16 bits") && fileDepth() == 16);  // not saved
+    answer("Save as 8-bit");
+    save->trigger();
+    CHECK(fileDepth() == 8);
+    answer("Cancel");
+    save->trigger();
+    QTest::qWait(100);
+    CHECK(shown.isEmpty());  // now an 8-bit file: no question
+}
+
 // Free Transform's free corners: Ctrl-drag distorts, Ctrl+Shift-drag gives perspective.
 static void testDistort(MainWindow &w, ToolManager *tools)
 {
@@ -2789,6 +2841,7 @@ int main(int argc, char **argv) {
     testRemove(w, tools, settings);
     testQuickSelect(w, tools, settings);
     testDistort(w, tools);
+    testHighBitDepth(w);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();

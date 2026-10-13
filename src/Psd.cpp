@@ -975,7 +975,9 @@ Document *readPsd(QFile &f, QStringList &notes, QImage *mergedOnly = nullptr)
     }
     state.active = int(state.layers.size()) - 1;
     state.guides = guides;
-    return new Document(state);
+    auto *doc = new Document(state);
+    doc->setFileBitDepth(depth);
+    return doc;
 }
 
 // --- Writing ---------------------------------------------------------------

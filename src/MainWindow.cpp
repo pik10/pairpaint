@@ -970,6 +970,36 @@ void MainWindow::openFile(const QString &path)
     QSettings().setValue("lastDir", QFileInfo(abs).absolutePath());
     if (!warning.isEmpty())
         QMessageBox::information(this, QFileInfo(abs).fileName(), warning);
+    if (d->fileBitDepth() > 8 && QSettings().value("noteHighBitDepth", true).toBool()) {
+        QMessageBox box(QMessageBox::Information, QFileInfo(abs).fileName(),
+                        tr("This image has %1 bits per color channel. PairPaint edits with 8 bits per channel, "
+                           "so the finest shades are rounded: fine for most edits, but saving over the original "
+                           "would lose them. PairPaint asks before it does; Export or Save As keep the original as it is.")
+                            .arg(d->fileBitDepth()),
+                        QMessageBox::Ok, this);
+        box.setCheckBox(new QCheckBox(tr("Don't show this again")));
+        box.exec();
+        if (box.checkBox()->isChecked())
+            QSettings().setValue("noteHighBitDepth", false);
+    }
+}
+
+// Saving over a file with more than 8 bits per channel makes it 8-bit: asks first.
+bool MainWindow::confirmOverwriteBitDepth(Document *d, const QString &path)
+{
+    if (d->fileBitDepth() <= 8 || QFileInfo(path) != QFileInfo(d->filePath()))
+        return true;
+    QMessageBox box(QMessageBox::Warning, tr("Save"),
+                    tr("%1 has %2 bits per color channel. Saving over it stores PairPaint's 8 bits per channel, "
+                       "and the finest shades of the original are lost.\n\nTo keep the original, cancel and use "
+                       "Export or Save As.")
+                        .arg(QFileInfo(path).fileName())
+                        .arg(d->fileBitDepth()),
+                    QMessageBox::Cancel, this);
+    QPushButton *overwrite = box.addButton(tr("Save as 8-bit"), QMessageBox::AcceptRole);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    return box.clickedButton() == overwrite;
 }
 
 void MainWindow::offerRecovery()
@@ -1051,6 +1081,8 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
     // A quick edit of a JPEG or PNG (crop, resize, adjust: still one plain layer) saves straight
     // back to it, since the file can hold everything.
     if (!saveAs && FileIO::isFlatImageFile(path) && !hasLayeredContent(d)) {
+        if (!confirmOverwriteBitDepth(d, path))
+            return false;
         QString error;
         QApplication::setOverrideCursor(Qt::WaitCursor);
         const bool ok = exportTo(d, path, QSettings().value("exportQuality", 92).toInt(), &error);
@@ -1059,6 +1091,7 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
             QMessageBox::critical(this, tr("Save"), tr("Could not save %1:\n%2").arg(QFileInfo(path).fileName(), error));
             return false;
         }
+        d->setFileBitDepth(8);
         statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(path).fileName()), 3000);
         return true;
     }
@@ -1079,6 +1112,8 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
         }
     }
 
+    if (!confirmOverwriteBitDepth(d, path))
+        return false;
     QString error, warning;
     QApplication::setOverrideCursor(Qt::WaitCursor);
     const bool ok = FileIO::save(d, path, &error, &warning);
@@ -1090,6 +1125,7 @@ bool MainWindow::saveDocument(int tab, bool saveAs)
     if (!warning.isEmpty())
         QMessageBox::warning(this, tr("Save"), warning);
     d->setFilePath(path);
+    d->setFileBitDepth(8);
     d->undoStack()->setClean();
     addRecentFile(path);
     QSettings().setValue("lastDir", QFileInfo(path).absolutePath());

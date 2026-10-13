@@ -11,6 +11,11 @@
 - **Distort and perspective** in Free Transform: Ctrl-drag a corner to move it freely (to fit
   an image onto a sign or a screen), Ctrl+Shift-drag a corner for perspective.
 
+### Fixed
+- Opening a 16-bit PNG, TIFF or PSD quietly turned it into 8 bits per channel, and Save could
+  then overwrite the original with the 8-bit copy. Now PairPaint says so when the file opens,
+  and asks before saving over it.
+
 ## 0.9.2 — 2026-10-12
 
 ### Changed

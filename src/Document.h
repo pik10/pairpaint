@@ -240,6 +240,10 @@ public:
 
     QString filePath() const { return m_filePath; }
     void setFilePath(const QString &path);
+    // Bits per color channel of the file at filePath(): more than 8 (16-bit PNG, TIFF or PSD) means
+    // saving over it in PairPaint's 8 bits would lose precision.
+    int fileBitDepth() const { return m_fileBitDepth; }
+    void setFileBitDepth(int bits) { m_fileBitDepth = bits; }
     QString displayName() const;
     bool isModified() const { return !m_undo.isClean(); }
     void markModified() { m_undo.resetClean(); }  // e.g. recovered after a crash: not saved anywhere
@@ -266,6 +270,7 @@ private:
     QUndoStack m_undo;
     QRect m_selectionBounds;
     QString m_filePath;
+    int m_fileBitDepth = 8;
     bool m_editMask = false;
     int m_untitled = 0;
     int m_layerCounter = 0;

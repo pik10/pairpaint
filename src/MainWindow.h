@@ -80,6 +80,7 @@ private:
     void newImage();
     void openDialog();
     bool saveDocument(int tab, bool saveAs);
+    bool confirmOverwriteBitDepth(Document *d, const QString &path);
     void exportDocument();
     bool maybeSave(int tab);
     bool closeTab(int tab);
