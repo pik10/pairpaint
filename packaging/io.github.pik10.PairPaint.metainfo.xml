@@ -51,6 +51,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.10.0" date="2026-10-12">
+      <description>
+        <p>A Remove tool and Content-Aware Fill that make unwanted objects disappear into their surroundings, a Quick Selection tool that selects an object up to its edges as you paint, and distort and perspective in Free Transform. 16-bit files are no longer overwritten with 8-bit copies without asking.</p>
+      </description>
+    </release>
     <release version="0.9.2" date="2026-10-12">
       <description>
         <p>The downloads now include the licenses of the libraries they bundle, also shown under Help, About PairPaint, Licenses. The Windows download is smaller.</p>

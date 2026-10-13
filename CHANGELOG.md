@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 — 2026-10-12
 
 ### New
 - **Remove tool**: paint over an unwanted object (a person, a sign, a power line) and, when you
