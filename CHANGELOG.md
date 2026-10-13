@@ -8,6 +8,8 @@
 - **Edit > Content-Aware Fill** (Shift+Backspace) does the same for a selection.
 - **Quick Selection tool** (Shift+W): paint over an object and the selection spreads to its edges
   as you paint. Paint more to add to it; Alt or Ctrl subtracts.
+- **Distort and perspective** in Free Transform: Ctrl-drag a corner to move it freely (to fit
+  an image onto a sign or a screen), Ctrl+Shift-drag a corner for perspective.
 
 ## 0.9.2 — 2026-10-12
 

@@ -119,7 +119,7 @@ cmake --build build -j
 Selection modifiers: Shift adds, Alt or Ctrl subtracts, Shift+Alt intersects.
 Clone Stamp / Healing Brush: Alt-click (or Ctrl-click) sets the source point.
 Free Transform: drag handles to scale (Shift keeps proportions), outside the box to rotate (Shift snaps
-to 15°), inside to move; Enter applies, Esc cancels.
+to 15°), inside to move; Ctrl-drag a corner to distort, Ctrl+Shift-drag a corner for perspective; Enter applies, Esc cancels.
 
 ## Code layout
 

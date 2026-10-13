@@ -23,6 +23,7 @@
 #include <QPainterPath>
 #include <QToolTip>
 #include <QtMath>
+#include <array>
 #include <functional>
 #include <limits>
 
@@ -934,7 +935,8 @@ private:
 
 // ---------------------------------------------------------------------------
 // Free transform: scale (handles), rotate (drag outside the box) and move
-// (drag inside) the layer or the selected pixels. Enter applies, Esc cancels.
+// (drag inside) the layer or the selected pixels. Ctrl-dragging a corner distorts (the corners
+// move freely from then on), Ctrl+Shift gives perspective. Enter applies, Esc cancels.
 
 class TransformTool : public Tool {
 public:
@@ -952,12 +954,19 @@ public:
             begin();
         if (!m_active)
             return;
+        m_handle = handleAt(e.widgetPos);
+        if (m_handle >= 0 && m_handle % 2 == 0 && (e.modifiers & Qt::ControlModifier) && !m_free) {
+            // From now on the corners move freely.
+            for (int i = 0; i < 4; ++i)
+                m_quad[size_t(i)] = handlePos(2 * i);
+            m_free = true;
+        }
         m_press = e.pos;
         m_c0 = m_center;
         m_w0 = m_w;
         m_h0 = m_h;
         m_a0 = m_angle;
-        m_handle = handleAt(e.widgetPos);
+        m_quad0 = m_quad;
         if (m_handle >= 0)
             m_drag = DragHandle;
         else if (insideBox(e.pos))
@@ -971,7 +980,9 @@ public:
         if (!m_active || m_drag == DragNone)
             return;
         const bool shift = e.modifiers & Qt::ShiftModifier;
-        if (m_drag == DragMove) {
+        if (m_free) {
+            moveCorners(e.pos - m_press, shift);
+        } else if (m_drag == DragMove) {
             m_center = m_c0 + (e.pos - m_press);
         } else if (m_drag == DragRotate) {
             const QPointF a = m_press - m_c0, b = e.pos - m_c0;
@@ -1065,6 +1076,7 @@ private:
         m_w = m_source.width();
         m_h = m_source.height();
         m_angle = 0;
+        m_free = false;
         m_active = true;
         m_modified = false;
         m_drag = DragNone;
@@ -1100,8 +1112,62 @@ private:
         m_canvas->update();
     }
 
+    // Free corners: moves, rotates or distorts the quadrilateral as it was at the press.
+    void moveCorners(const QPointF &delta, bool shift)
+    {
+        std::array<QPointF, 4> q = m_quad0;
+        if (m_drag == DragMove) {
+            for (QPointF &c : q)
+                c += delta;
+        } else if (m_drag == DragRotate) {
+            const QPointF center = (q[0] + q[1] + q[2] + q[3]) / 4;
+            const QPointF a = m_press - center, b = m_press + delta - center;
+            qreal angle = qRadiansToDegrees(std::atan2(b.y(), b.x()) - std::atan2(a.y(), a.x()));
+            if (shift)
+                angle = std::round(angle / 15.0) * 15.0;
+            for (QPointF &c : q)
+                c = center + rotated(c - center, angle);
+        } else if (m_handle % 2) {
+            // A side: both its corners.
+            q[size_t(m_handle / 2)] += delta;
+            q[size_t((m_handle / 2 + 1) % 4)] += delta;
+        } else {
+            const int k = m_handle / 2;  // corners: top left, top right, bottom right, bottom left
+            if (shift) {
+                // Perspective: the corner beside it on the same side moves the opposite way.
+                static constexpr int across[4] = {1, 0, 3, 2}, along[4] = {3, 2, 1, 0};
+                if (std::abs(delta.x()) >= std::abs(delta.y())) {
+                    q[size_t(k)] += QPointF(delta.x(), 0);
+                    q[size_t(across[k])] -= QPointF(delta.x(), 0);
+                } else {
+                    q[size_t(k)] += QPointF(0, delta.y());
+                    q[size_t(along[k])] -= QPointF(0, delta.y());
+                }
+            } else {
+                q[size_t(k)] += delta;  // distort
+            }
+        }
+        // Only shapes that can show the image: convex, with the corners in their order.
+        qreal sign = 0;
+        for (int i = 0; i < 4; ++i) {
+            const QPointF a = q[size_t((i + 1) % 4)] - q[size_t(i)], b = q[size_t((i + 2) % 4)] - q[size_t((i + 1) % 4)];
+            const qreal cross = a.x() * b.y() - a.y() * b.x();
+            if (std::abs(cross) < 1e-6 || (sign != 0 && (cross > 0) != (sign > 0)))
+                return;
+            sign = cross;
+        }
+        m_quad = q;
+    }
+
     QTransform transform() const
     {
+        if (m_free) {
+            const QRectF s = m_source;
+            QTransform t;
+            QTransform::quadToQuad(QPolygonF({s.topLeft(), s.topRight(), s.bottomRight(), s.bottomLeft()}),
+                                   QPolygonF({m_quad[0], m_quad[1], m_quad[2], m_quad[3]}), t);
+            return t;
+        }
         QTransform t;
         t.translate(m_center.x(), m_center.y());
         t.rotate(m_angle);
@@ -1112,6 +1178,8 @@ private:
 
     QPointF handlePos(int i) const
     {
+        if (m_free)  // corners, and the middles of the sides between them
+            return i % 2 ? (m_quad[size_t(i / 2)] + m_quad[size_t((i / 2 + 1) % 4)]) / 2 : m_quad[size_t(i / 2)];
         static const QPointF dirs[8] = {{-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}};
         return m_center + rotated(QPointF(dirs[i].x() * m_w / 2, dirs[i].y() * m_h / 2), m_angle);
     }
@@ -1126,6 +1194,8 @@ private:
 
     bool insideBox(const QPointF &imagePos) const
     {
+        if (m_free)
+            return QPolygonF({m_quad[0], m_quad[1], m_quad[2], m_quad[3]}).containsPoint(imagePos, Qt::OddEvenFill);
         const QPointF local = rotated(imagePos - m_center, -m_angle);
         return std::abs(local.x()) <= m_w / 2 && std::abs(local.y()) <= m_h / 2;
     }
@@ -1137,6 +1207,8 @@ private:
     QRectF m_source;
     QPointF m_center;
     qreal m_w = 0, m_h = 0, m_angle = 0;
+    bool m_free = false;                 // the corners move freely (distort, perspective)
+    std::array<QPointF, 4> m_quad, m_quad0;  // then: top left, top right, bottom right, bottom left
     Drag m_drag = DragNone;
     int m_handle = -1;
     QPointF m_press, m_c0;
@@ -1781,7 +1853,8 @@ QString Tool::hint(Id id)
 {
     switch (id) {
     case Move: return QObject::tr("Drag to move the layer or the selected pixels. Arrow keys nudge (Shift = 10 px).");
-    case Transform: return QObject::tr("Drag handles to scale (Shift keeps proportions), outside to rotate, inside to move. Enter applies, Esc cancels.");
+    case Transform: return QObject::tr("Drag handles to scale (Shift keeps proportions), outside to rotate, inside to move · "
+                                       "Ctrl-drag a corner to distort, Ctrl+Shift for perspective · Enter applies, Esc cancels");
     case RectSelect:
     case EllipseSelect:
     case Lasso:

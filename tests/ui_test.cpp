@@ -1247,6 +1247,39 @@ static void testEverydayFixes(MainWindow &w, ToolManager *tools, ToolSettings *s
     }
 }
 
+// Free Transform's free corners: Ctrl-drag distorts, Ctrl+Shift-drag gives perspective.
+static void testDistort(MainWindow &w, ToolManager *tools)
+{
+    QImage img(200, 200, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    QPainter p(&img);
+    p.fillRect(50, 50, 100, 100, Qt::green);
+    p.end();
+    w.addDocument(new Document(img));
+    auto *c = qobject_cast<Canvas *>(w.findChild<QTabWidget *>()->currentWidget());
+    Document *d = c->document();
+    c->fitToWindow();
+    auto alphaAt = [&](int x, int y) { return qAlpha(d->layer(0).image.pixel(x, y)); };
+    auto key = [&](int k) { QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier); QApplication::sendEvent(c, &e); };
+
+    tools->setCurrent(Tool::Transform);
+    c->activateTool();
+    drag(c, {50, 50}, {20, 20}, Qt::ControlModifier);  // only the top left corner moves
+    key(Qt::Key_Return);
+    CHECK(alphaAt(25, 25) > 200 && alphaAt(148, 52) > 200 && alphaAt(148, 148) > 200);
+    CHECK(alphaAt(25, 140) == 0 && alphaAt(140, 25) == 0);  // the other corners stayed
+    CHECK(d->undoStack()->undoText() == "Free Transform");
+    d->undoStack()->undo();
+    CHECK(alphaAt(25, 25) == 0);
+
+    c->activateTool();
+    drag(c, {50, 50}, {75, 50}, Qt::ControlModifier | Qt::ShiftModifier);  // the top gets narrower on both sides
+    key(Qt::Key_Return);
+    CHECK(alphaAt(60, 52) == 0 && alphaAt(140, 52) == 0 && alphaAt(100, 52) > 200);
+    CHECK(alphaAt(53, 147) > 200 && alphaAt(147, 147) > 200);  // the bottom stayed as wide
+    tools->setCurrent(Tool::Move);
+}
+
 // Quick Selection: painting over a disc selects the disc up to its edge, not the background.
 static void testQuickSelect(MainWindow &w, ToolManager *tools, ToolSettings *settings)
 {
@@ -2755,6 +2788,7 @@ int main(int argc, char **argv) {
     testAboutBox(w);
     testRemove(w, tools, settings);
     testQuickSelect(w, tools, settings);
+    testDistort(w, tools);
     testPhotoshopFiles();
     testDamagedFiles();
     testHostileFiles();
